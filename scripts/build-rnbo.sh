@@ -83,7 +83,7 @@ else
     for f in "$EXPORT_DIR"/*.cpp; do
         [ -f "$f" ] || continue
         base="$(basename "$f")"
-        if [ "$base" != "RNBO.cpp" ]; then
+        if [ "$base" != "RNBO.cpp" ] && [ "$base" != "_build_wrapper.cpp" ]; then
             PATCHER_SRC="$base"
             break
         fi
@@ -99,6 +99,9 @@ fi
 echo "=== Building RNBO Device: $DEVICE_NAME ($MODULE_ID) ==="
 echo "Export dir: $EXPORT_DIR"
 echo "Patcher:   $PATCHER_SRC"
+
+# Clean up any leftover build artifacts from previous runs
+rm -rf "$EXPORT_DIR/_build" "$EXPORT_DIR/_build_wrapper.cpp"
 
 # Copy the device API header and wrapper into the export dir
 mkdir -p "$EXPORT_DIR/_build"
