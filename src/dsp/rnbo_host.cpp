@@ -229,7 +229,10 @@ static std::vector<ParamMeta> parse_params_from_description(const char *json) {
             }
         }
 
-        if (!pm.paramId.empty()) params.push_back(pm);
+        /* Skip invisible params (polyphony sub-patcher duplicates) and signal params */
+        bool visible = json_get_bool(s, "visible", true);
+        std::string ptype = json_get_string(s, "type");
+        if (!pm.paramId.empty() && visible && ptype != "ParameterTypeSignal") params.push_back(pm);
         arr = p;
         if (*arr == ',') arr++;
         while (*arr == ' ' || *arr == '\n' || *arr == '\t') arr++;
@@ -450,7 +453,9 @@ static std::string build_device_list(const std::vector<RnboDevice> &devices) {
     std::string j = "[";
     for (size_t i = 0; i < devices.size(); i++) {
         if (i) j += ",";
-        j += "\"" + escape_json(devices[i].name) + "\"";
+        char idx[16];
+        snprintf(idx, sizeof(idx), "%d", (int)i);
+        j += "{\"label\":\"" + escape_json(devices[i].name) + "\",\"index\":" + idx + "}";
     }
     j += "]";
     return j;
