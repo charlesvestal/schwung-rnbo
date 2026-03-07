@@ -1,0 +1,21 @@
+{
+  "id": "rnbo-fx",
+  "name": "RNBO FX",
+  "abbrev": "RF",
+  "version": "0.1.0",
+  "description": "Host for RNBO audio effect exports from Max/MSP",
+  "author": "charlesvestal",
+  "license": "MIT",
+  "dsp": "dsp.so",
+  "api_version": 2,
+  "standalone": false,
+  "capabilities": {
+    "audio_out": true,
+    "audio_in": true,
+    "midi_in": true,
+    "midi_out": false,
+    "aftertouch": false,
+    "chainable": true,
+    "component_type": "audio_fx"
+  }
+}

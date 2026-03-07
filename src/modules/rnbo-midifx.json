@@ -1,0 +1,21 @@
+{
+  "id": "rnbo-midifx",
+  "name": "RNBO MIDI FX",
+  "abbrev": "RM",
+  "version": "0.1.0",
+  "description": "Host for RNBO MIDI effect exports from Max/MSP",
+  "author": "charlesvestal",
+  "license": "MIT",
+  "dsp": "dsp.so",
+  "api_version": 2,
+  "standalone": false,
+  "capabilities": {
+    "audio_out": false,
+    "audio_in": false,
+    "midi_in": true,
+    "midi_out": true,
+    "aftertouch": false,
+    "chainable": true,
+    "component_type": "midi_fx"
+  }
+}

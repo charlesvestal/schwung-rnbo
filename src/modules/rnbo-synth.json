@@ -1,0 +1,21 @@
+{
+  "id": "rnbo-synth",
+  "name": "RNBO Synth",
+  "abbrev": "RS",
+  "version": "0.1.0",
+  "description": "Host for RNBO instrument exports from Max/MSP",
+  "author": "charlesvestal",
+  "license": "MIT",
+  "dsp": "dsp.so",
+  "api_version": 2,
+  "standalone": false,
+  "capabilities": {
+    "audio_out": true,
+    "audio_in": false,
+    "midi_in": true,
+    "midi_out": false,
+    "aftertouch": true,
+    "chainable": true,
+    "component_type": "sound_generator"
+  }
+}
