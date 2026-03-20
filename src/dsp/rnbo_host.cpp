@@ -794,7 +794,7 @@ static void build_graph_ui(RnboInstance *inst) {
         params = &all_params;
     }
 
-    /* chain_params */
+    /* chain_params — flat list of all params for chain registration */
     std::string cp = "[{\"key\":\"volume\",\"name\":\"Volume\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.02,\"default\":0.7}";
     for (auto &vp : *params) {
         auto &pm = inst->devices[g.nodes[vp.node_index].device_index].params[vp.param_index];
@@ -803,17 +803,52 @@ static void build_graph_ui(RnboInstance *inst) {
     cp += "]";
     inst->chain_params_json = cp;
 
-    /* ui_hierarchy */
+    /* ui_hierarchy — tree: root has volume + sublevels per patcher */
     std::string ui = "{\"levels\":{\"root\":{\"label\":\"" + escape_json(g.name) + "\",\"params\":[{\"key\":\"volume\",\"label\":\"Volume\"}";
+
+    /* Collect which nodes have params */
+    std::map<int, std::vector<const ViewParam*>> node_params;
     for (auto &vp : *params)
-        ui += ",{\"key\":\"" + escape_json(vp.key) + "\",\"label\":\"" + escape_json(vp.label) + "\"}";
+        node_params[vp.node_index].push_back(&vp);
+
+    /* Add sublevel entry for each patcher with params */
+    for (auto &[ni, vps] : node_params) {
+        std::string level_id = "node_" + std::to_string(ni);
+        std::string label = g.nodes[ni].patcher_name;
+        ui += ",{\"level\":\"" + escape_json(level_id) + "\",\"label\":\"" + escape_json(label) + "\"}";
+    }
+
+    /* Knobs: volume + first params from view (or first node) */
     ui += "],\"knobs\":[\"volume\"";
     int k = 0;
     for (auto &vp : *params) {
         if (k++ >= 7) break;
         ui += ",\"" + escape_json(vp.key) + "\"";
     }
-    ui += "]}}}";
+    ui += "]}";
+
+    /* Define each patcher sublevel */
+    for (auto &[ni, vps] : node_params) {
+        std::string level_id = "node_" + std::to_string(ni);
+        std::string label = g.nodes[ni].patcher_name;
+        ui += ",\"" + escape_json(level_id) + "\":{\"label\":\"" + escape_json(label) + "\",\"params\":[";
+        bool first = true;
+        for (auto *vp : vps) {
+            if (!first) ui += ",";
+            first = false;
+            ui += "{\"key\":\"" + escape_json(vp->key) + "\",\"label\":\"" + escape_json(vp->label) + "\"}";
+        }
+        ui += "],\"knobs\":[";
+        int kn = 0;
+        for (auto *vp : vps) {
+            if (kn++ >= 8) break;
+            if (kn > 1) ui += ",";
+            ui += "\"" + escape_json(vp->key) + "\"";
+        }
+        ui += "]}";
+    }
+
+    ui += "}}";
     inst->ui_hierarchy_json = ui;
 }
 
