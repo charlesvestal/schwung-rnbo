@@ -21,26 +21,50 @@ install_module() {
         return
     fi
 
-    # Check if any devices exist
-    if [ ! -d "$REPO_ROOT/dist/$MODULE_ID/devices" ] || [ -z "$(ls -A "$REPO_ROOT/dist/$MODULE_ID/devices/" 2>/dev/null)" ]; then
-        echo "Skipping $MODULE_ID (no devices)"
+    # Check if pack or devices exist
+    local HAS_PACK=false
+    local HAS_DEVICES=false
+    [ -d "$REPO_ROOT/dist/$MODULE_ID/pack" ] && HAS_PACK=true
+    [ -d "$REPO_ROOT/dist/$MODULE_ID/devices" ] && [ -n "$(ls -A "$REPO_ROOT/dist/$MODULE_ID/devices/" 2>/dev/null)" ] && HAS_DEVICES=true
+
+    if ! $HAS_PACK && ! $HAS_DEVICES; then
+        echo "Skipping $MODULE_ID (no pack or devices)"
         return
     fi
 
     echo ""
     echo "--- $MODULE_ID ---"
-    ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $MODULE_DIR/devices"
+    ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $MODULE_DIR"
 
     scp "$REPO_ROOT/dist/$MODULE_ID/module.json" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
-    scp "$REPO_ROOT/dist/$MODULE_ID/dsp.so" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
 
-    for dev_dir in "$REPO_ROOT/dist/$MODULE_ID/devices"/*/; do
-        [ -d "$dev_dir" ] || continue
-        dev_name="$(basename "$dev_dir")"
-        echo "  Device: $dev_name"
-        ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $MODULE_DIR/devices/$dev_name"
-        scp "$dev_dir"* "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/devices/$dev_name/"
-    done
+    # Copy host .so
+    if [ -f "$REPO_ROOT/dist/$MODULE_ID/dsp.so" ]; then
+        scp "$REPO_ROOT/dist/$MODULE_ID/dsp.so" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
+    elif [ -f "$REPO_ROOT/dist/$MODULE_ID/$MODULE_ID.so" ]; then
+        scp "$REPO_ROOT/dist/$MODULE_ID/$MODULE_ID.so" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
+    fi
+
+    # Copy pack directory (graph mode)
+    if $HAS_PACK; then
+        echo "  Installing pack (graph)..."
+        ssh "$MOVE_USER@$MOVE_HOST" "rm -rf $MODULE_DIR/pack && mkdir -p $MODULE_DIR/pack"
+        # Use tar to preserve directory structure efficiently
+        (cd "$REPO_ROOT/dist/$MODULE_ID/pack" && tar cf - .) | \
+            ssh "$MOVE_USER@$MOVE_HOST" "cd $MODULE_DIR/pack && tar xf -"
+    fi
+
+    # Copy devices directory (legacy single-device mode)
+    if $HAS_DEVICES; then
+        ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $MODULE_DIR/devices"
+        for dev_dir in "$REPO_ROOT/dist/$MODULE_ID/devices"/*/; do
+            [ -d "$dev_dir" ] || continue
+            dev_name="$(basename "$dev_dir")"
+            echo "  Device: $dev_name"
+            ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $MODULE_DIR/devices/$dev_name"
+            scp "$dev_dir"* "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/devices/$dev_name/"
+        done
+    fi
 
     # Chain patches
     if [ -d "$REPO_ROOT/dist/$MODULE_ID/chain_patches" ]; then
