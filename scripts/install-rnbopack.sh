@@ -78,7 +78,9 @@ for p in info['patchers']:
     else:
         dev_type = 'synth'
 
-    module_id = f'rnbo-{dev_type}'
+    # For graph mode, all devices go into the primary module
+    # (determined after the loop). For now, collect them all as synth.
+    module_id = 'rnbo-synth'
     dest = os.path.join(repo, 'dist', module_id, 'devices', dir_name)
     os.makedirs(dest, exist_ok=True)
 
@@ -94,6 +96,26 @@ for p in info['patchers']:
     shutil.copy2(config_path, os.path.join(dest, 'description.json'))
 
     print(f'  {name} -> {module_id}/devices/{dir_name}/ ({dev_type})')
+
+    # Determine primary module (the one with the audio output)
+    primary_module = 'rnbo-synth'  # default
+    for p in info['patchers']:
+        cfg_path = os.path.join(pack, p.get('config',''))
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f: cfg=json.load(f)
+            if cfg.get('numOutputChannels',0) > 0 and cfg.get('numInputChannels',0) > 0:
+                primary_module = 'rnbo-fx'
+                break
+
+    # Copy full pack structure (info.json + sets/) into the primary module
+    pack_dest = os.path.join(repo, 'dist', primary_module, 'pack')
+    if os.path.exists(pack_dest):
+        shutil.rmtree(pack_dest)
+    os.makedirs(pack_dest, exist_ok=True)
+    shutil.copy2(os.path.join(pack, 'info.json'), os.path.join(pack_dest, 'info.json'))
+    sets_src = os.path.join(pack, 'sets')
+    if os.path.exists(sets_src):
+        shutil.copytree(sets_src, os.path.join(pack_dest, 'sets'))
 
 print('Done!')
 "

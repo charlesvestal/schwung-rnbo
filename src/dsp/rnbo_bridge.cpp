@@ -85,7 +85,7 @@ struct BridgeDevice : public RNBO::EventHandler {
     BridgeDevice(RNBO::CoreObject *c) : core(c), msg_callback(nullptr), msg_context(nullptr), midi_out_count(0) {}
     ~BridgeDevice() { delete core; }
 
-    void eventsAvailable() override { drainEvents(); }
+    void eventsAvailable() override { /* don't auto-drain — let process() handle events */ }
 
     void handleMidiEvent(const RNBO::MidiEvent& event) override {
         if (midi_out_count < 256) {
@@ -128,8 +128,8 @@ rnbo_device_t rnbo_device_create(void) {
     if (!ensure_factory()) return nullptr;
     RNBO::UniquePtr<RNBO::PatcherInterface> patcher(g_factory());
     if (!patcher) return nullptr;
-    auto *dev = new BridgeDevice(nullptr);
-    dev->core = new RNBO::CoreObject(std::move(patcher), dev);
+    auto *core = new RNBO::CoreObject(std::move(patcher));
+    auto *dev = new BridgeDevice(core);
     return (rnbo_device_t)dev;
 }
 
