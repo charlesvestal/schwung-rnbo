@@ -614,6 +614,8 @@ struct RnboGraph {
     std::vector<int> process_order;
     int audio_output_node;
     std::vector<int> midi_input_nodes;
+    int audio_input_node;            /* node that receives chain audio input (-1 = none) */
+    int audio_input_node_ch2;        /* second channel may go to same or different node */
     std::vector<ViewParam> view_params;
     bool is_effect;
 };
@@ -713,6 +715,8 @@ static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice>
 
     /* Parse connections */
     graph.audio_output_node = -1;
+    graph.audio_input_node = -1;
+    graph.audio_input_node_ch2 = -1;
     graph.midi_input_nodes.clear();
 
     const char *conn_arr = strstr(json, "\"connections\"");
@@ -743,8 +747,27 @@ static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice>
                     p = scan; continue;
                 }
 
-                /* Skip record/system sinks */
-                if (snk_name == "rnbo-record" || snk_name == "system") { p = scan; continue; }
+                /* Skip record sinks */
+                if (snk_name == "rnbo-record") { p = scan; continue; }
+
+                /* Audio input from system (chain audio for effects) */
+                if (src_name == "system" && snk_inst >= 0 &&
+                    (src_port.find("capture") != std::string::npos)) {
+                    auto it = inst_to_node.find(snk_inst);
+                    if (it != inst_to_node.end()) {
+                        if (src_port.find("2") != std::string::npos)
+                            graph.audio_input_node_ch2 = it->second;
+                        else
+                            graph.audio_input_node = it->second;
+                        graph.is_effect = true;
+                        host_log("rnbo: system audio input -> node '%s' port '%s'",
+                                 graph.nodes[it->second].patcher_name.c_str(), snk_port.c_str());
+                    }
+                    p = scan; continue;
+                }
+
+                /* Skip other system sinks */
+                if (snk_name == "system") { p = scan; continue; }
 
                 /* MIDI from pads */
                 if (src_name == "move-control" && snk_inst >= 0) {
@@ -898,11 +921,12 @@ static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice>
         if (std::find(graph.process_order.begin(), graph.process_order.end(), i) == graph.process_order.end())
             graph.process_order.push_back(i);
 
-    graph.is_effect = false;
+    /* is_effect was set during connection parsing if system:capture was found */
 
-    host_log("rnbo: graph '%s': %d nodes, %d connections, audio_out=%d, %d midi_in, %d view_params",
+    host_log("rnbo: graph '%s': %d nodes, %d connections, audio_out=%d, audio_in=%d, is_effect=%d, %d midi_in, %d view_params",
              graph.name.c_str(), n, (int)graph.connections.size(),
-             graph.audio_output_node, (int)graph.midi_input_nodes.size(), (int)graph.view_params.size());
+             graph.audio_output_node, graph.audio_input_node, graph.is_effect ? 1 : 0,
+             (int)graph.midi_input_nodes.size(), (int)graph.view_params.size());
     return true;
 }
 
@@ -1067,6 +1091,28 @@ static void process_graph(RnboInstance *inst, int16_t *out_lr, int frames) {
             memset(node.out_buf[ch], 0, frames * sizeof(float));
         }
         node.pending_midi.clear();
+    }
+
+    /* Feed chain audio input to designated node (for effects) */
+    if (g.audio_input_node >= 0 && g.is_effect) {
+        auto &in_node = g.nodes[g.audio_input_node];
+        for (int i = 0; i < frames; i++)
+            in_node.in_buf[0][i] = out_lr[i * 2 + 0] / 32768.0f;
+        int ch2_node = (g.audio_input_node_ch2 >= 0) ? g.audio_input_node_ch2 : g.audio_input_node;
+        auto &in_node2 = g.nodes[ch2_node];
+        int ch2 = (ch2_node == g.audio_input_node) ? 1 : 0;
+        for (int i = 0; i < frames; i++)
+            in_node2.in_buf[ch2][i] = out_lr[i * 2 + 1] / 32768.0f;
+
+        static int fx_dbg = 0;
+        if (++fx_dbg % 1000 == 1) {
+            float in_peak = 0;
+            for (int i = 0; i < frames; i++) {
+                float v = fabsf(in_node.in_buf[0][i]);
+                if (v > in_peak) in_peak = v;
+            }
+            host_log("rnbo: FX input peak=%.6f", in_peak);
+        }
     }
 
     /* Clear message capture contexts */
