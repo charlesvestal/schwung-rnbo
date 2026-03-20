@@ -85,7 +85,10 @@ struct BridgeDevice : public RNBO::EventHandler {
     BridgeDevice(RNBO::CoreObject *c) : core(c), msg_callback(nullptr), msg_context(nullptr), midi_out_count(0) {}
     ~BridgeDevice() { delete core; }
 
-    void eventsAvailable() override { /* don't auto-drain — let process() handle events */ }
+    void eventsAvailable() override { /* don't auto-drain — host calls drain() explicitly */ }
+
+    /* Public wrapper for protected drainEvents() */
+    void drain() { drainEvents(); }
 
     void handleMidiEvent(const RNBO::MidiEvent& event) override {
         if (midi_out_count < 256) {
@@ -128,8 +131,8 @@ rnbo_device_t rnbo_device_create(void) {
     if (!ensure_factory()) return nullptr;
     RNBO::UniquePtr<RNBO::PatcherInterface> patcher(g_factory());
     if (!patcher) return nullptr;
-    auto *core = new RNBO::CoreObject(std::move(patcher));
-    auto *dev = new BridgeDevice(core);
+    auto *dev = new BridgeDevice(nullptr);
+    dev->core = new RNBO::CoreObject(std::move(patcher), dev);
     return (rnbo_device_t)dev;
 }
 
@@ -247,6 +250,11 @@ void rnbo_device_set_message_callback(rnbo_device_t dev,
     if (!dev) return;
     DEV(dev)->msg_callback = callback;
     DEV(dev)->msg_context = context;
+}
+
+void rnbo_device_drain_messages(rnbo_device_t dev) {
+    if (!dev) return;
+    DEV(dev)->drain();
 }
 
 int rnbo_device_get_num_params(rnbo_device_t dev) {

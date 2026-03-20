@@ -86,6 +86,7 @@ typedef void (*fn_set_param)(rnbo_device_t, int, double);
 typedef void (*fn_send_msg_num)(rnbo_device_t, const char*, double);
 typedef void (*fn_send_msg_list)(rnbo_device_t, const char*, const double*, int);
 typedef void (*fn_set_msg_cb)(rnbo_device_t, rnbo_message_callback_t, void*);
+typedef void (*fn_drain_msgs)(rnbo_device_t);
 
 /* ======================================================================
  * Globals
@@ -267,6 +268,7 @@ struct RnboDevice {
     fn_send_msg_num    api_send_msg_num;
     fn_send_msg_list   api_send_msg_list;
     fn_set_msg_cb      api_set_msg_cb;
+    fn_drain_msgs      api_drain_msgs;
 
     int num_input_channels;
     int num_output_channels;
@@ -331,6 +333,7 @@ static bool load_device(RnboDevice &dev) {
     dev.api_send_msg_num = (fn_send_msg_num)dlsym(dev.dl_handle, "rnbo_device_send_message_number");
     dev.api_send_msg_list = (fn_send_msg_list)dlsym(dev.dl_handle, "rnbo_device_send_message_list");
     dev.api_set_msg_cb = (fn_set_msg_cb)dlsym(dev.dl_handle, "rnbo_device_set_message_callback");
+    dev.api_drain_msgs = (fn_drain_msgs)dlsym(dev.dl_handle, "rnbo_device_drain_messages");
 
     if (!dev.api_create || !dev.api_destroy || !dev.api_prepare || !dev.api_process) {
         host_log("rnbo: missing C API in %s", dev.so_path.c_str());
@@ -831,53 +834,68 @@ static void process_graph(RnboInstance *inst, int16_t *out_lr, int frames) {
                 dev.api_midi_in(node.handle, m.data, m.len);
         }
 
-        /* Process audio (MIDI already injected above) */
+        /* Process audio with MIDI output capture */
         int nin = std::min(dev.num_input_channels, MAX_CH);
         int nout = std::min(dev.num_output_channels, MAX_CH);
-        dev.api_process(node.handle, node.in_ptrs, nin, node.out_ptrs, nout, frames);
-
-        /* Capture MIDI output for routing */
         rnbo_midi_event_t midi_out[256];
         int midi_out_count = 0;
-        /* TODO: use process_with_midi once EventHandler draining is fixed */
 
-        /* Route outputs to connected sinks */
+        if (dev.api_process_midi) {
+            midi_out_count = dev.api_process_midi(node.handle,
+                node.in_ptrs, nin, node.out_ptrs, nout, frames,
+                midi_out, 256);
+        } else {
+            dev.api_process(node.handle, node.in_ptrs, nin, node.out_ptrs, nout, frames);
+        }
+
+        /* Drain outgoing messages (delivered to callback) */
+        if (dev.api_drain_msgs)
+            dev.api_drain_msgs(node.handle);
+
+        /* Route audio and MIDI via explicit connections */
         for (auto &conn : g.connections) {
             if (conn.source_node != ni) continue;
             if (conn.sink_node < 0 || conn.sink_node >= (int)g.nodes.size()) continue;
             auto &sink = g.nodes[conn.sink_node];
 
-            switch (conn.type) {
-            case CONN_AUDIO: {
+            if (conn.type == CONN_AUDIO) {
                 int src_ch = (conn.source_port.find("2") != std::string::npos) ? 1 : 0;
                 int snk_ch = (conn.sink_port.find("2") != std::string::npos) ? 1 : 0;
                 if (src_ch < nout && snk_ch < MAX_CH)
                     for (int i = 0; i < frames; i++)
                         sink.in_buf[snk_ch][i] += node.out_buf[src_ch][i];
-                break;
-            }
-            case CONN_MIDI:
+            } else if (conn.type == CONN_MIDI) {
                 for (int i = 0; i < midi_out_count; i++)
                     sink.pending_midi.push_back(midi_out[i]);
-                break;
-            case CONN_MESSAGE: {
-                /* Route captured messages from this node to sink's inports */
-                auto &msgs = inst->node_msg_ctx[ni].messages;
-                auto &sink_dev = inst->devices[sink.device_index];
+            }
+        }
+
+        /* Route messages via global bus: outport tag → all nodes with matching inport */
+        auto &msgs = inst->node_msg_ctx[ni].messages;
+        if (!msgs.empty()) {
+            static int msg_dbg = 0;
+            if (++msg_dbg <= 20)
+                host_log("rnbo: node[%d] '%s' emitted %d messages", ni, node.patcher_name.c_str(), (int)msgs.size());
+            for (auto &msg : msgs) {
+                if (msg_dbg <= 20)
+                    host_log("rnbo:   tag='%s' values=%d", msg.tag.c_str(), (int)msg.values.size());
+            }
+            for (auto &other_node : g.nodes) {
+                if (!other_node.handle) continue;
+                auto &other_dev = inst->devices[other_node.device_index];
                 for (auto &msg : msgs) {
-                    /* Check if sink has a matching inport */
-                    for (auto &inport : sink_dev.inports) {
+                    for (auto &inport : other_dev.inports) {
                         if (inport == msg.tag) {
-                            if (msg.values.size() == 1 && sink_dev.api_send_msg_num)
-                                sink_dev.api_send_msg_num(sink.handle, msg.tag.c_str(), msg.values[0]);
-                            else if (msg.values.size() > 1 && sink_dev.api_send_msg_list)
-                                sink_dev.api_send_msg_list(sink.handle, msg.tag.c_str(), msg.values.data(), (int)msg.values.size());
+                            if (msg.values.empty() && other_dev.api_send_msg_num)
+                                other_dev.api_send_msg_num(other_node.handle, msg.tag.c_str(), 0);
+                            else if (msg.values.size() == 1 && other_dev.api_send_msg_num)
+                                other_dev.api_send_msg_num(other_node.handle, msg.tag.c_str(), msg.values[0]);
+                            else if (msg.values.size() > 1 && other_dev.api_send_msg_list)
+                                other_dev.api_send_msg_list(other_node.handle, msg.tag.c_str(), msg.values.data(), (int)msg.values.size());
                             break;
                         }
                     }
                 }
-                break;
-            }
             }
         }
     }

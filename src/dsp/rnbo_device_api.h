@@ -105,11 +105,14 @@ void rnbo_device_send_message_number(rnbo_device_t dev, const char *tag, double 
 void rnbo_device_send_message_list(rnbo_device_t dev, const char *tag,
                                     const double *values, int num_values);
 
-/* Message output callback — set before processing to capture outport messages */
+/* Message output callback — captures outport messages after drain */
 typedef void (*rnbo_message_callback_t)(void *context, const char *tag,
                                          const double *values, int num_values);
 void rnbo_device_set_message_callback(rnbo_device_t dev,
                                        rnbo_message_callback_t callback, void *context);
+
+/* Drain pending output events (messages). Call AFTER process to capture outport messages. */
+void rnbo_device_drain_messages(rnbo_device_t dev);
 
 #ifdef __cplusplus
 }
