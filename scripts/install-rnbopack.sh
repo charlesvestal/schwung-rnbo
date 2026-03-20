@@ -46,9 +46,15 @@ if not target:
 
 print(f'Pack: {info[\"name\"]} (RNBO {info[\"rnbo_version\"]})')
 
+# Derive pack prefix from rnbopack filename for namespacing
+import re
+pack_basename = os.path.basename('$RNBOPACK')
+pack_prefix = re.sub(r'-rnbo-.*$', '', pack_basename.replace('.rnbopack', '')).lower()
+
 for p in info['patchers']:
     name = p['name']
-    dir_name = name.lower().replace(' ', '-').replace('_', '-')
+    safe_name = name.lower().replace(' ', '-').replace('_', '-')
+    dir_name = pack_prefix + '_' + safe_name
 
     binary = p.get('binaries', {}).get(target)
     if not binary:

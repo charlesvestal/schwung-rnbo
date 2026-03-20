@@ -419,6 +419,23 @@ static void extract_rnbopacks(const char *module_dir) {
 
         host_log("rnbo: extracted '%s' to cache", name.c_str());
 
+        /* Derive pack prefix from filename for namespacing devices.
+         * "graph-Test-rnbo-1.4.3.rnbopack" → "graph-test"
+         * "graph-NoiseDelayVerb-rnbo-1.4.3.rnbopack" → "graph-noisedelayverb" */
+        std::string pack_prefix;
+        {
+            std::string base = name;
+            /* Strip .rnbopack */
+            size_t dot = base.rfind(".rnbopack");
+            if (dot != std::string::npos) base = base.substr(0, dot);
+            /* Strip -rnbo-X.Y.Z */
+            size_t rnbo_pos = base.find("-rnbo-");
+            if (rnbo_pos != std::string::npos) base = base.substr(0, rnbo_pos);
+            /* Lowercase */
+            for (char &c : base) if (c >= 'A' && c <= 'Z') c += 32;
+            pack_prefix = base;
+        }
+
         /* Parse info.json to install devices */
         std::string info_str = read_file(pack_info.c_str());
         if (info_str.empty()) continue;
@@ -452,13 +469,14 @@ static void extract_rnbopacks(const char *module_dir) {
             std::string patcher_name = json_get_string(obj.c_str(), "name");
             if (patcher_name.empty()) { p = scan; continue; }
 
-            /* Safe directory name */
-            std::string dir_name;
+            /* Safe directory name, prefixed by pack name to avoid collisions */
+            std::string safe_patcher;
             for (char c : patcher_name) {
-                if (c == ' ' || c == '_') dir_name += '-';
-                else if (c >= 'A' && c <= 'Z') dir_name += (c + 32);
-                else dir_name += c;
+                if (c == ' ' || c == '_') safe_patcher += '-';
+                else if (c >= 'A' && c <= 'Z') safe_patcher += (c + 32);
+                else safe_patcher += c;
             }
+            std::string dir_name = pack_prefix + "_" + safe_patcher;
 
             /* Find binary path */
             std::string bin_key = "\"" + target_key + "\"";
@@ -653,9 +671,20 @@ static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice>
             else dir_name += c;
         }
 
+        /* Try exact match first, then suffix match (for prefixed device names) */
         auto it = name_to_dev.find(dir_name);
         if (it == name_to_dev.end()) {
-            host_log("rnbo: graph instance '%s' (dir '%s') not found in devices", patcher_name.c_str(), dir_name.c_str());
+            std::string suffix = "_" + dir_name;
+            for (auto &kv : name_to_dev) {
+                if (kv.first.size() >= suffix.size() &&
+                    kv.first.substr(kv.first.size() - suffix.size()) == suffix) {
+                    it = name_to_dev.find(kv.first);
+                    break;
+                }
+            }
+        }
+        if (it == name_to_dev.end()) {
+            host_log("rnbo: graph instance '%s' not found in devices", patcher_name.c_str());
             p = scan; continue;
         }
 
