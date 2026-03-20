@@ -8,15 +8,15 @@ Drop `.rnbopack` files into the appropriate module directory on the device:
 
 | Type | Directory on Move |
 |------|------------------|
-| **Synths** | `/data/UserData/move-anything/modules/sound_generators/rnbo-synth/` |
-| **Audio FX** | `/data/UserData/move-anything/modules/audio_fx/rnbo-fx/` |
+| **Synths** | `.../modules/sound_generators/rnbo-synth/packs/` |
+| **Audio FX** | `.../modules/audio_fx/rnbo-fx/packs/` |
 
 ```bash
 # Copy a synth pack
-scp my-synth.rnbopack ableton@move.local:/data/UserData/move-anything/modules/sound_generators/rnbo-synth/
+scp my-synth.rnbopack ableton@move.local:/data/UserData/move-anything/modules/sound_generators/rnbo-synth/packs/
 
 # Copy an effect pack
-scp my-effect.rnbopack ableton@move.local:/data/UserData/move-anything/modules/audio_fx/rnbo-fx/
+scp my-effect.rnbopack ableton@move.local:/data/UserData/move-anything/modules/audio_fx/rnbo-fx/packs/
 ```
 
 The host extracts and loads packs automatically on startup. No compilation or install scripts needed.

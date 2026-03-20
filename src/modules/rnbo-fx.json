@@ -6,7 +6,7 @@
   "description": "Host for RNBO audio effect exports from Max/MSP",
   "author": "charlesvestal",
   "license": "MIT",
-  "dsp": "dsp.so",
+  "dsp": "rnbo-fx.so",
   "api_version": 2,
   "standalone": false,
   "capabilities": {

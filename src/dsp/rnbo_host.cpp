@@ -381,8 +381,9 @@ static void extract_rnbopacks(const char *module_dir) {
     if (!bf) return;
     fclose(bf);
 
-    /* Scan for .rnbopack files */
-    DIR *dir = opendir(module_dir);
+    /* Scan packs/ subdirectory for .rnbopack files */
+    std::string packs_dir = mod + "/packs";
+    DIR *dir = opendir(packs_dir.c_str());
     if (!dir) return;
     struct dirent *entry;
     while ((entry = readdir(dir)) != nullptr) {
@@ -390,7 +391,7 @@ static void extract_rnbopacks(const char *module_dir) {
         size_t len = name.size();
         if (len < 9 || name.substr(len - 9) != ".rnbopack") continue;
 
-        std::string pack_path = mod + "/" + name;
+        std::string pack_path = packs_dir + "/" + name;
         std::string pack_cache = cache_dir + "/" + name;
         std::string pack_info = pack_cache + "/info.json";
 
@@ -1249,6 +1250,7 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
     inst->graph_mode = false;
 
     /* Extract any .rnbopack files into devices/ and pack/ */
+    host_log("rnbo: module_dir = '%s'", module_dir);
     extract_rnbopacks(module_dir);
 
     std::string devices_dir = std::string(module_dir) + "/devices";
