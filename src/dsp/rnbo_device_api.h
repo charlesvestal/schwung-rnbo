@@ -78,6 +78,39 @@ double rnbo_device_get_param(rnbo_device_t dev, int index);
 /* Set parameter value */
 void rnbo_device_set_param(rnbo_device_t dev, int index, double value);
 
+/* ======================================================================
+ * Extended API for graph support
+ * ====================================================================== */
+
+/* MIDI event for process_with_midi */
+typedef struct {
+    uint8_t data[3];
+    int len;
+} rnbo_midi_event_t;
+
+/* Process audio and capture MIDI output.
+ * midi_out: pre-allocated array to receive MIDI events
+ * midi_out_capacity: max events to capture
+ * Returns: number of MIDI events written to midi_out */
+int rnbo_device_process_with_midi(rnbo_device_t dev,
+                                   float **inputs, int num_inputs,
+                                   float **outputs, int num_outputs,
+                                   int frames,
+                                   rnbo_midi_event_t *midi_out, int midi_out_capacity);
+
+/* Send a number message to a named inport (e.g., "/rnbo/scl") */
+void rnbo_device_send_message_number(rnbo_device_t dev, const char *tag, double value);
+
+/* Send a list message to a named inport */
+void rnbo_device_send_message_list(rnbo_device_t dev, const char *tag,
+                                    const double *values, int num_values);
+
+/* Message output callback — set before processing to capture outport messages */
+typedef void (*rnbo_message_callback_t)(void *context, const char *tag,
+                                         const double *values, int num_values);
+void rnbo_device_set_message_callback(rnbo_device_t dev,
+                                       rnbo_message_callback_t callback, void *context);
+
 #ifdef __cplusplus
 }
 #endif
