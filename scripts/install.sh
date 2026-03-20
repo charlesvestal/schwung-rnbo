@@ -38,11 +38,14 @@ install_module() {
 
     scp "$REPO_ROOT/dist/$MODULE_ID/module.json" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
 
-    # Copy host .so
+    # Copy host .so and bridge.so
     if [ -f "$REPO_ROOT/dist/$MODULE_ID/dsp.so" ]; then
         scp "$REPO_ROOT/dist/$MODULE_ID/dsp.so" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
     elif [ -f "$REPO_ROOT/dist/$MODULE_ID/$MODULE_ID.so" ]; then
         scp "$REPO_ROOT/dist/$MODULE_ID/$MODULE_ID.so" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
+    fi
+    if [ -f "$REPO_ROOT/dist/$MODULE_ID/bridge.so" ]; then
+        scp "$REPO_ROOT/dist/$MODULE_ID/bridge.so" "$MOVE_USER@$MOVE_HOST:$MODULE_DIR/"
     fi
 
     # Copy pack directory (graph mode)

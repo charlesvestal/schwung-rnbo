@@ -85,6 +85,9 @@ for MODULE in rnbo-synth rnbo-fx rnbo-midifx; do
         cat build/dsp.so > "dist/$MODULE/$MODULE.so"
         chmod +x "dist/$MODULE/$MODULE.so"
     fi
+    # Include bridge.so for runtime rnbopack extraction
+    cat build/bridge.so > "dist/$MODULE/bridge.so"
+    chmod +x "dist/$MODULE/bridge.so"
 done
 
 echo ""
