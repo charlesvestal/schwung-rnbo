@@ -587,14 +587,18 @@ static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice>
         }
     }
 
-    /* Also route MIDI to audio output node if it has MIDI input */
-    if (graph.audio_output_node >= 0) {
-        auto &out = graph.nodes[graph.audio_output_node];
-        auto &out_dev = devices[out.device_index];
-        if (out_dev.num_midi_input_ports > 0) {
+    /* Also route host MIDI to any node with MIDI input + audio output (synths).
+     * The set JSON only wires move-control to MIDI processors like Pad Scale,
+     * which may not forward MIDI. Synths need MIDI directly. */
+    for (size_t ni = 0; ni < graph.nodes.size(); ni++) {
+        auto &node_dev = devices[graph.nodes[ni].device_index];
+        if (node_dev.num_midi_input_ports > 0 && node_dev.num_output_channels > 0) {
             auto &v = graph.midi_input_nodes;
-            if (std::find(v.begin(), v.end(), graph.audio_output_node) == v.end())
-                v.push_back(graph.audio_output_node);
+            if (std::find(v.begin(), v.end(), (int)ni) == v.end()) {
+                v.push_back((int)ni);
+                host_log("rnbo: also routing host MIDI to '%s' (has midi+audio)",
+                         graph.nodes[ni].patcher_name.c_str());
+            }
         }
     }
 
@@ -769,9 +773,30 @@ static void build_param_json(std::string &j, const ParamMeta &pm, const std::str
 static void build_graph_ui(RnboInstance *inst) {
     auto &g = inst->graph;
 
+    /* If no view params, generate from all nodes' params */
+    std::vector<ViewParam> *params = &g.view_params;
+    std::vector<ViewParam> all_params;
+    if (g.view_params.empty()) {
+        for (size_t ni = 0; ni < g.nodes.size(); ni++) {
+            auto &dev = inst->devices[g.nodes[ni].device_index];
+            for (size_t pi = 0; pi < dev.params.size(); pi++) {
+                auto &pm = dev.params[pi];
+                ViewParam vp;
+                vp.node_index = (int)ni;
+                vp.param_index = (int)pi;
+                std::string safe_id;
+                for (char c : pm.paramId) safe_id += (c == '/') ? '-' : c;
+                vp.key = std::to_string(g.nodes[ni].instance_index) + "_" + safe_id;
+                vp.label = pm.displayName.empty() ? pm.name : pm.displayName;
+                all_params.push_back(vp);
+            }
+        }
+        params = &all_params;
+    }
+
     /* chain_params */
     std::string cp = "[{\"key\":\"volume\",\"name\":\"Volume\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.02,\"default\":0.7}";
-    for (auto &vp : g.view_params) {
+    for (auto &vp : *params) {
         auto &pm = inst->devices[g.nodes[vp.node_index].device_index].params[vp.param_index];
         build_param_json(cp, pm, vp.key);
     }
@@ -780,11 +805,11 @@ static void build_graph_ui(RnboInstance *inst) {
 
     /* ui_hierarchy */
     std::string ui = "{\"levels\":{\"root\":{\"label\":\"" + escape_json(g.name) + "\",\"params\":[{\"key\":\"volume\",\"label\":\"Volume\"}";
-    for (auto &vp : g.view_params)
+    for (auto &vp : *params)
         ui += ",{\"key\":\"" + escape_json(vp.key) + "\",\"label\":\"" + escape_json(vp.label) + "\"}";
     ui += "],\"knobs\":[\"volume\"";
     int k = 0;
-    for (auto &vp : g.view_params) {
+    for (auto &vp : *params) {
         if (k++ >= 7) break;
         ui += ",\"" + escape_json(vp.key) + "\"";
     }
