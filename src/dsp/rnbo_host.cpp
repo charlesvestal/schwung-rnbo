@@ -13,6 +13,9 @@
 #include <math.h>
 #include <dlfcn.h>
 #include <dirent.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 #include <vector>
 #include <string>
 #include <map>
@@ -348,6 +351,175 @@ static bool load_device(RnboDevice &dev) {
 
 static void unload_device(RnboDevice &dev) {
     if (dev.dl_handle) { dlclose(dev.dl_handle); dev.dl_handle = nullptr; }
+}
+
+/* ======================================================================
+ * Rnbopack extraction — fork+exec tar (same approach as Module Store)
+ * ====================================================================== */
+
+static int run_command(const char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        dup2(STDOUT_FILENO, STDERR_FILENO);
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    int status;
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static void extract_rnbopacks(const char *module_dir) {
+    std::string mod(module_dir);
+    std::string bridge_path = mod + "/bridge.so";
+    std::string devices_dir = mod + "/devices";
+    std::string cache_dir = mod + "/cache";
+
+    /* Need bridge.so to create device directories */
+    FILE *bf = fopen(bridge_path.c_str(), "r");
+    if (!bf) return;
+    fclose(bf);
+
+    /* Scan for .rnbopack files */
+    DIR *dir = opendir(module_dir);
+    if (!dir) return;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        std::string name = entry->d_name;
+        size_t len = name.size();
+        if (len < 9 || name.substr(len - 9) != ".rnbopack") continue;
+
+        std::string pack_path = mod + "/" + name;
+        std::string pack_cache = cache_dir + "/" + name;
+        std::string pack_info = pack_cache + "/info.json";
+
+        /* Skip if already extracted */
+        FILE *ci = fopen(pack_info.c_str(), "r");
+        if (ci) { fclose(ci); host_log("rnbo: pack '%s' already extracted", name.c_str()); continue; }
+
+        /* Create cache dir and extract */
+        host_log("rnbo: extracting '%s'", name.c_str());
+        const char *mkdir_cmd[] = { "mkdir", "-p", pack_cache.c_str(), NULL };
+        if (run_command(mkdir_cmd) != 0) continue;
+
+        /* rnbopack is a plain tar (not gzipped), strip top-level directory */
+        const char *tar_cmd[] = {
+            "tar", "-xf", pack_path.c_str(), "-C", pack_cache.c_str(),
+            "--strip-components=1", NULL
+        };
+        if (run_command(tar_cmd) != 0) {
+            host_log("rnbo: tar extraction failed for '%s'", name.c_str());
+            continue;
+        }
+
+        /* Fix ownership */
+        const char *chown_cmd[] = { "chown", "-R", "ableton:users", pack_cache.c_str(), NULL };
+        run_command(chown_cmd);
+
+        host_log("rnbo: extracted '%s' to cache", name.c_str());
+
+        /* Parse info.json to install devices */
+        std::string info_str = read_file(pack_info.c_str());
+        if (info_str.empty()) continue;
+
+        /* Find aarch64 target */
+        std::string target_key;
+        const char *tgt = strstr(info_str.c_str(), "aarch64");
+        if (tgt) {
+            const char *q = tgt;
+            while (q > info_str.c_str() && *q != '"') q--;
+            if (*q == '"') { q++; const char *end = strchr(q, '"'); if (end) target_key = std::string(q, end - q); }
+        }
+        if (target_key.empty()) continue;
+
+        /* Parse patchers and create device directories */
+        const char *patchers = strstr(info_str.c_str(), "\"patchers\"");
+        if (!patchers) continue;
+        patchers = strchr(patchers, '[');
+        if (!patchers) continue;
+
+        const char *p = patchers + 1;
+        while (*p) {
+            const char *obj_start = strchr(p, '{');
+            if (!obj_start) break;
+            const char *scan = obj_start + 1;
+            int depth = 1;
+            while (*scan && depth > 0) { if (*scan == '{') depth++; else if (*scan == '}') depth--; scan++; }
+            if (depth != 0) break;
+            std::string obj(obj_start, scan - obj_start);
+
+            std::string patcher_name = json_get_string(obj.c_str(), "name");
+            if (patcher_name.empty()) { p = scan; continue; }
+
+            /* Safe directory name */
+            std::string dir_name;
+            for (char c : patcher_name) {
+                if (c == ' ' || c == '_') dir_name += '-';
+                else if (c >= 'A' && c <= 'Z') dir_name += (c + 32);
+                else dir_name += c;
+            }
+
+            /* Find binary path */
+            std::string bin_key = "\"" + target_key + "\"";
+            const char *bin_pos = strstr(obj.c_str(), bin_key.c_str());
+            std::string binary_rel;
+            if (bin_pos) {
+                bin_pos = strchr(bin_pos + bin_key.size(), ':');
+                if (bin_pos) {
+                    bin_pos++; while (*bin_pos == ' ' || *bin_pos == '\t') bin_pos++;
+                    if (*bin_pos == '"') { bin_pos++; const char *end = strchr(bin_pos, '"');
+                        if (end) binary_rel = std::string(bin_pos, end - bin_pos); }
+                }
+            }
+
+            std::string config_rel = json_get_string(obj.c_str(), "config");
+            if (binary_rel.empty() || config_rel.empty()) { p = scan; continue; }
+
+            /* Create device dir and copy files */
+            std::string dev_dir = devices_dir + "/" + dir_name;
+            const char *mk_cmd[] = { "mkdir", "-p", dev_dir.c_str(), NULL };
+            run_command(mk_cmd);
+
+            std::string src_binary = pack_cache + "/" + binary_rel;
+            std::string src_config = pack_cache + "/" + config_rel;
+            std::string dst_device = dev_dir + "/device.so";
+            std::string dst_patcher = dev_dir + "/patcher.so";
+            std::string dst_desc = dev_dir + "/description.json";
+
+            const char *cp1[] = { "cp", bridge_path.c_str(), dst_device.c_str(), NULL };
+            const char *cp2[] = { "cp", src_binary.c_str(), dst_patcher.c_str(), NULL };
+            const char *cp3[] = { "cp", src_config.c_str(), dst_desc.c_str(), NULL };
+            run_command(cp1); run_command(cp2); run_command(cp3);
+
+            host_log("rnbo: installed device '%s'", patcher_name.c_str());
+
+            p = scan;
+            if (*p == ',') p++;
+            while (*p == ' ' || *p == '\n' || *p == '\t') p++;
+            if (*p == ']') break;
+        }
+
+        /* Also copy set JSON into pack/ for graph loading */
+        std::string pack_dest = mod + "/pack";
+        const char *mk_pack[] = { "mkdir", "-p", pack_dest.c_str(), NULL };
+        run_command(mk_pack);
+        std::string cp_info_src = pack_info;
+        std::string cp_info_dst = pack_dest + "/info.json";
+        const char *cp_info[] = { "cp", cp_info_src.c_str(), cp_info_dst.c_str(), NULL };
+        run_command(cp_info);
+
+        /* Copy sets directory */
+        std::string sets_src = pack_cache + "/sets";
+        std::string sets_dst = pack_dest + "/sets";
+        DIR *sets_dir = opendir(sets_src.c_str());
+        if (sets_dir) {
+            closedir(sets_dir);
+            const char *cp_sets[] = { "cp", "-r", sets_src.c_str(), sets_dst.c_str(), NULL };
+            run_command(cp_sets);
+        }
+    }
+    closedir(dir);
 }
 
 static std::vector<RnboDevice> scan_devices(const char *devices_dir) {
@@ -1000,6 +1172,9 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
     inst->module_dir = module_dir;
     inst->volume = 0.7f;
     inst->graph_mode = false;
+
+    /* Extract any .rnbopack files into devices/ and pack/ */
+    extract_rnbopacks(module_dir);
 
     std::string devices_dir = std::string(module_dir) + "/devices";
     inst->devices = scan_devices(devices_dir.c_str());
