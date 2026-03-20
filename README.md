@@ -1,112 +1,73 @@
-# RNBO Host Module for Move Anything
+# RNBO for Move Anything
 
-Run [RNBO](https://rnbo.cycling74.com/) C++ exports from Max/MSP on Ableton Move via the Signal Chain.
+Run [RNBO](https://rnbo.cycling74.com/) graphs from Max/MSP on Ableton Move via the Signal Chain.
+
+## Adding Packs
+
+Drop `.rnbopack` files into the appropriate module directory on the device:
+
+| Type | Directory on Move |
+|------|------------------|
+| **Synths** | `/data/UserData/move-anything/modules/sound_generators/rnbo-synth/` |
+| **Audio FX** | `/data/UserData/move-anything/modules/audio_fx/rnbo-fx/` |
+
+```bash
+# Copy a synth pack
+scp my-synth.rnbopack ableton@move.local:/data/UserData/move-anything/modules/sound_generators/rnbo-synth/
+
+# Copy an effect pack
+scp my-effect.rnbopack ableton@move.local:/data/UserData/move-anything/modules/audio_fx/rnbo-fx/
+```
+
+The host extracts and loads packs automatically on startup. No compilation or install scripts needed.
 
 ## How It Works
 
-Three host modules (`rnbo-synth`, `rnbo-fx`, `rnbo-midifx`) dynamically load compiled RNBO device `.so` files at runtime. Each device is a stock RNBO C++ export cross-compiled for ARM64 — no code changes needed.
+Each `.rnbopack` contains a complete RNBO graph — multiple interconnected patchers with pre-compiled ARM64 binaries, a set JSON defining the wiring, and parameter views.
+
+The host:
+1. Extracts the `.rnbopack` tar to a cache directory
+2. Loads each patcher via a bridge `.so` (handles RNBO SDK version matching)
+3. Wires patchers together per the set JSON (audio, MIDI, and message routing)
+4. Processes all patchers in topological order each audio block
+5. Exposes parameters to Move's knobs via the set's views
 
 ```
-Move Anything Signal Chain
-    └── RNBO Host Module (dsp.so)
-            └── devices/
-                ├── my-synth/device.so + description.json
-                └── my-delay/device.so + description.json
+.rnbopack file
+    → host extracts to cache/
+    → loads patcher .so files via bridge
+    → parses set JSON for graph wiring
+    → processes: Synth → Delay → Reverb → Limiter → output
 ```
 
-Parameters from `description.json` are automatically exposed to Move's knobs and Shadow UI.
+## Creating Packs
 
-## Building a Device from an RNBO Export
+1. Build your RNBO graph in Max (use the Beta for RNBO 1.4.3)
+2. Deploy to the Move RNBO runner target
+3. Export the `.rnbopack` from the runner
+4. Copy to the appropriate module directory on Move
 
-### Prerequisites
+**Synth graphs**: Generate audio, receive MIDI from pads. Audio output connects to `move-volume`.
 
-- Docker (for ARM64 cross-compilation)
-- An RNBO C++ Source Code export from Max/MSP (contains `rnbo_source.cpp`, `rnbo/` directory, and `description.json`)
+**Effect graphs**: Process audio from the chain. Audio input from `system:capture`, output to `move-volume`.
 
-### Steps
+## Building the Host
 
-1. **Export from Max/MSP**: In your RNBO patcher, use the "C++ Source Code Export" target. The export directory should contain:
-   - `rnbo_source.cpp` (or another `.cpp` file)
-   - `rnbo/` (the RNBO C++ runtime)
-   - `description.json`
-
-2. **Build the device**:
-   ```bash
-   ./scripts/build-rnbo.sh /path/to/rnbo-export [device-name] [synth|fx|midifx]
-   ```
-   - Device name defaults to the export directory name
-   - Type is auto-detected from `description.json` (audio inputs → fx, MIDI output only → midifx, otherwise → synth)
-
-3. **Deploy to Move**:
-   ```bash
-   # Deploy just the device
-   ./scripts/install-device.sh dist/rnbo-synth/devices/my-synth
-
-   # Or deploy everything
-   ./scripts/install.sh
-   ```
-
-### Example
+Only needed once (or when updating host code):
 
 ```bash
-# Build waveguide string synth from a GitHub example
-git clone https://github.com/bynarlogic/string-vst.git /tmp/string-vst
-./scripts/build-rnbo.sh /tmp/string-vst/export waveguide-string
-
-# Deploy to Move
-./scripts/install-device.sh dist/rnbo-synth/devices/waveguide-string
-```
-
-## Building the Host Modules
-
-The host modules only need to be built once (or when updating the host code):
-
-```bash
+# Requires Docker and RNBO SDK 1.4.3 in rnbo-sdk/
 ./scripts/build.sh
 ./scripts/install.sh
 ```
 
-This produces three modules that share the same `dsp.so`:
-- `rnbo-synth` — Sound generator (Signal Chain synth slot)
-- `rnbo-fx` — Audio effect (Signal Chain FX slot)
-- `rnbo-midifx` — MIDI effect (Signal Chain MIDI FX slot)
-
-## Important Notes
-
-- **RNBO version matching**: Each export includes its own `rnbo/` runtime. The patcher `.cpp` must be compiled with its matching runtime — mixing versions causes build failures.
-- **No code changes needed**: Stock RNBO exports compile as-is. The build script adds a thin C API wrapper automatically.
-- **Multiple devices**: Place multiple devices in `devices/` — use the "Choose Device" menu to switch between them.
-- **Parameter visibility**: Hidden parameters (e.g. polyphony sub-patcher params) are automatically filtered out.
-
 ## Architecture
 
-The host and device communicate via a flat C API (`rnbo_device_api.h`) to avoid cross-shared-library C++ vtable issues:
-
 ```
-Host (dsp.so)                    Device (device.so)
-  plugin_api_v2          dlopen    rnbo_device_api.h (C API)
-  rnbo_host.cpp  ──────────────>  rnbo_device_wrapper.cpp
-  (Move plugin)          dlsym    RNBO::CoreObject (C++ internals)
+Host (dsp.so)              Bridge (device.so)           Patcher (patcher.so)
+  graph orchestrator  →      RNBO CoreObject wrapper  →   pre-compiled from rnbopack
+  flat C API consumer        float↔double conversion      GetPatcherFactoryFunction
+  no RNBO dependency         RNBO SDK 1.4.3               RNBO 1.4.3 binary
 ```
 
-The device wrapper uses `RNBO::CoreObject` to properly initialize the patcher with its Engine, then exports flat C functions for create/destroy/prepare/process/MIDI/parameters.
-
-## File Structure
-
-```
-src/
-  dsp/
-    rnbo_host.cpp           # Host plugin (Move plugin_api_v2)
-    rnbo_device_api.h       # Flat C API between host and device
-    rnbo_device_wrapper.cpp # Included in each device build
-  modules/
-    rnbo-synth.json         # Module metadata
-    rnbo-fx.json
-    rnbo-midifx.json
-scripts/
-    build.sh                # Build host modules
-    build-rnbo.sh           # Build a device from RNBO export
-    install.sh              # Deploy to Move
-    install-device.sh       # Deploy a single device
-    Dockerfile              # ARM64 cross-compilation environment
-```
+The bridge isolates RNBO SDK ABI — the host never touches RNBO C++ types directly. This allows the host to work with any RNBO version as long as the bridge is compiled with a matching SDK.
