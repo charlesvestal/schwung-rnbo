@@ -528,6 +528,13 @@ static void extract_rnbopacks(const char *module_dir) {
         const char *cp_info[] = { "cp", cp_info_src.c_str(), cp_info_dst.c_str(), NULL };
         run_command(cp_info);
 
+        /* Store pack prefix so graph loading can use it for device matching */
+        {
+            std::string prefix_path = pack_dest + "/pack_prefix.txt";
+            FILE *pf = fopen(prefix_path.c_str(), "w");
+            if (pf) { fputs(pack_prefix.c_str(), pf); fclose(pf); }
+        }
+
         /* Copy sets directory */
         std::string sets_src = pack_cache + "/sets";
         std::string sets_dst = pack_dest + "/sets";
@@ -634,7 +641,7 @@ static ConnType classify_port(const std::string &port) {
     return CONN_MESSAGE;
 }
 
-static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice> &devices, RnboGraph &graph) {
+static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice> &devices, RnboGraph &graph, const std::string &pack_prefix = "") {
     /* Parse instances */
     const char *json = set_json_str.c_str();
     graph.name = json_get_string(json, "name");
@@ -674,8 +681,15 @@ static bool build_graph(const std::string &set_json_str, std::vector<RnboDevice>
             else dir_name += c;
         }
 
-        /* Try exact match first, then suffix match (for prefixed device names) */
-        auto it = name_to_dev.find(dir_name);
+        /* Try pack-prefixed name first (e.g. "graph-test_synth"),
+         * then exact match, then suffix match as fallback */
+        auto it = name_to_dev.end();
+        if (!pack_prefix.empty()) {
+            std::string prefixed = pack_prefix + "_" + dir_name;
+            it = name_to_dev.find(prefixed);
+        }
+        if (it == name_to_dev.end())
+            it = name_to_dev.find(dir_name);
         if (it == name_to_dev.end()) {
             std::string suffix = "_" + dir_name;
             for (auto &kv : name_to_dev) {
@@ -1280,8 +1294,20 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
         }
     }
 
+    /* Read pack prefix for correct device matching */
+    std::string pack_prefix;
+    {
+        std::string prefix_str = read_file((pack_dir + "/pack_prefix.txt").c_str());
+        /* Trim trailing whitespace/newline */
+        while (!prefix_str.empty() && (prefix_str.back() == '\n' || prefix_str.back() == '\r' || prefix_str.back() == ' '))
+            prefix_str.pop_back();
+        pack_prefix = prefix_str;
+        if (!pack_prefix.empty())
+            host_log("rnbo: pack prefix = '%s'", pack_prefix.c_str());
+    }
+
     if (!set_json_str.empty() && !inst->devices.empty()) {
-        if (build_graph(set_json_str, inst->devices, inst->graph)) {
+        if (build_graph(set_json_str, inst->devices, inst->graph, pack_prefix)) {
             inst->graph_mode = true;
 
             /* Create and prepare all node handles */
