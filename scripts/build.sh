@@ -90,6 +90,12 @@ for MODULE in rnbo-synth rnbo-fx rnbo-midifx; do
     chmod +x "dist/$MODULE/bridge.so"
 done
 
+# Package RNBO Runner overtake module (no DSP — pure JS)
+echo "Packaging rnbo-runner..."
+mkdir -p "dist/rnbo-runner"
+cp src/modules/rnbo-runner/module.json "dist/rnbo-runner/"
+cp src/modules/rnbo-runner/ui.js "dist/rnbo-runner/"
+
 echo ""
 echo "=== Build Complete ==="
 echo "Host: build/dsp.so"

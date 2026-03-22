@@ -1,0 +1,15 @@
+{
+    "id": "rnbo-runner",
+    "name": "RNBO Runner",
+    "version": "0.1.0",
+    "description": "Run the official RNBO graph runner with full UI",
+    "author": "charlesvestal",
+    "license": "MIT",
+    "ui": "ui.js",
+    "api_version": 2,
+    "component_type": "overtake",
+    "capabilities": {
+        "audio_out": true,
+        "midi_out": true
+    }
+}
