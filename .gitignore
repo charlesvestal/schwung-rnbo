@@ -3,3 +3,4 @@ dist/
 rnbo-sdk/
 *.o
 *.so
+.worktrees/
