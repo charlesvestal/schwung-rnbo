@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 MOVE_HOST="${MOVE_HOST:-move.local}"
 MOVE_USER="${MOVE_USER:-ableton}"
-BASE_DIR="/data/UserData/move-anything/modules"
+BASE_DIR="/data/UserData/schwung/modules"
 
 echo "=== Installing RNBO Modules ==="
 echo "Target: $MOVE_USER@$MOVE_HOST"
@@ -80,6 +80,16 @@ install_module "rnbo-synth"  "sound_generators"
 install_module "rnbo-fx"     "audio_fx"
 install_module "rnbo-midifx" "midi_fx"
 
+# Install RNBO Runner overtake module (pure JS, no DSP)
+if [ -d "$REPO_ROOT/dist/rnbo-runner" ]; then
+    echo ""
+    echo "--- rnbo-runner (overtake) ---"
+    RUNNER_DIR="$BASE_DIR/overtake/rnbo-runner"
+    ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $RUNNER_DIR"
+    scp "$REPO_ROOT/dist/rnbo-runner/module.json" "$MOVE_USER@$MOVE_HOST:$RUNNER_DIR/"
+    scp "$REPO_ROOT/dist/rnbo-runner/ui.js" "$MOVE_USER@$MOVE_HOST:$RUNNER_DIR/"
+fi
+
 echo ""
 echo "=== Install Complete ==="
-echo "Restart Move Anything to load the modules."
+echo "Restart Schwung to load the modules."

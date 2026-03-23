@@ -1,0 +1,10 @@
+#!/bin/sh
+# RNBO Runner exit cleanup — called by shim on overtake exit
+echo "$(date) exit-hook running" >> /tmp/schwung-exit-hook.log
+# Kill everything RNBO-related. rnbomovecontrol ignores SIGTERM.
+killall -9 rnbomovecontrol 2>/dev/null
+killall -9 jackd 2>/dev/null
+killall -9 rnbooscquery 2>/dev/null
+killall -9 jack_transport_link 2>/dev/null
+killall -9 rnbo-runner-panel 2>/dev/null
+echo "$(date) exit-hook done" >> /tmp/schwung-exit-hook.log
