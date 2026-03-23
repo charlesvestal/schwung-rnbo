@@ -38,7 +38,7 @@ mkdir -p build
 # 1) Build host plugin (flat C API loader — no RNBO dependency)
 echo "Compiling host..."
 ${CROSS_PREFIX}g++ -g -O2 -fPIC -std=c++17 \
-    -Isrc/dsp \
+    -Isrc/dsp -Ijack-headers \
     -c src/dsp/rnbo_host.cpp \
     -o build/rnbo_host.o
 
