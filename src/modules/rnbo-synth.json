@@ -7,6 +7,7 @@
   "author": "charlesvestal",
   "license": "MIT",
   "dsp": "dsp.so",
+  "scan_packs": "packs/",
   "api_version": 2,
   "standalone": false,
   "capabilities": {
