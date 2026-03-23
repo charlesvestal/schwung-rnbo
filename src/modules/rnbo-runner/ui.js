@@ -32,6 +32,13 @@ globalThis.tick = function() {
         host_system_cmd('sh -c "export HOME=/data/UserData LD_LIBRARY_PATH=' + RNBO_DIR + '/lib:$LD_LIBRARY_PATH && nohup ' + CONTROL_BIN + ' -s ' + SHADOW_CONFIG + ' > /tmp/schwung-rnbomovecontrol.log 2>&1 &"');
     }
 
+    // Frame 50: pin JACK/RNBO to cores 2-3, Move stays on 0-1.
+    // Prevents RT scheduling contention between Move firmware and JACK graph.
+    if (phase === 50) {
+        host_system_cmd('sh -c "for p in $(pgrep -f jackd) $(pgrep rnbomovecontrol) $(pgrep rnbooscquery); do taskset -p 0xc $p 2>/dev/null; done &"');
+        host_system_cmd('sh -c "taskset -p 0x3 $(pgrep -f MoveOrigi) 2>/dev/null &"');
+    }
+
     // Frame 100: enable RNBO display
     if (phase === 100 && !displayEnabled) {
         clear_screen();
