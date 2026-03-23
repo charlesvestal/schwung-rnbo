@@ -30,7 +30,7 @@
 #include <errno.h>
 #include <sched.h>
 
-#include <stdatomic.h>
+#include <atomic>
 
 // ---- Constants ----
 
@@ -95,7 +95,7 @@ typedef struct RnboJackBridge {
 
 // ---- Single-instance guard ----
 
-static atomic_bool g_rnbo_jack_bridge_active = false;
+static std::atomic<bool> g_rnbo_jack_bridge_active{false};
 
 // ---- Internal helpers ----
 
@@ -493,14 +493,14 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
 
     // Enforce single-instance
     bool expected = false;
-    if (!atomic_compare_exchange_strong(&g_rnbo_jack_bridge_active, &expected, true)) {
+    if (!g_rnbo_jack_bridge_active.compare_exchange_strong(expected, true)) {
         if (log_fn) log_fn("JACK bridge already active (single-instance guard)");
         return NULL;
     }
 
     RnboJackBridge *b = (RnboJackBridge *)calloc(1, sizeof(RnboJackBridge));
     if (!b) {
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -513,7 +513,7 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
     // Step 1: Write runner config
     if (write_runner_config(b) < 0) {
         free(b);
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -521,7 +521,7 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
     b->jackd_pid = start_jackd(b);
     if (b->jackd_pid < 0) {
         free(b);
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -535,7 +535,7 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
         rnbo_bridge_set_error(b, "jack_client_open failed: status=%d", (int)status);
         if (b->jackd_pid > 0) { kill(b->jackd_pid, SIGTERM); waitpid(b->jackd_pid, NULL, 0); }
         free(b);
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -561,7 +561,7 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
         if (b->rb_audio_to_runner_R)   jack_ringbuffer_free(b->rb_audio_to_runner_R);
         if (b->rb_midi_to_runner)      jack_ringbuffer_free(b->rb_midi_to_runner);
         free(b);
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -593,7 +593,7 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
         jack_ringbuffer_free(b->rb_audio_to_runner_R);
         jack_ringbuffer_free(b->rb_midi_to_runner);
         free(b);
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -612,7 +612,7 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
         jack_ringbuffer_free(b->rb_audio_to_runner_R);
         jack_ringbuffer_free(b->rb_midi_to_runner);
         free(b);
-        atomic_store(&g_rnbo_jack_bridge_active, false);
+        g_rnbo_jack_bridge_active.store(false);
         return NULL;
     }
 
@@ -688,7 +688,7 @@ static void rnbo_jack_bridge_destroy(RnboJackBridge *b) {
     if (b->rb_midi_to_runner)      jack_ringbuffer_free(b->rb_midi_to_runner);
 
     // Clear global flag
-    atomic_store(&g_rnbo_jack_bridge_active, false);
+    g_rnbo_jack_bridge_active.store(false);
 
     rnbo_bridge_log(b, "JACK bridge destroyed");
     free(b);

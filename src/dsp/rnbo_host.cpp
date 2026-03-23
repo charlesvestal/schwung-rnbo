@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <queue>
 
+#include "rnbo_jack_bridge.h"
+
 /* Plugin API */
 extern "C" {
 #include <stdint.h>
@@ -966,6 +968,9 @@ struct RnboInstance {
     std::string module_dir;
     std::string chain_params_json;
     std::string ui_hierarchy_json;
+
+    RnboJackBridge *jack_bridge = nullptr;  /* non-null = JACK bridge mode */
+    std::string error;  /* Error message for get_error */
 };
 
 /* ======================================================================
@@ -1259,6 +1264,27 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
         config_pack_path = json_get_string(json_defaults, "pack");
     }
 
+    /* Check config_json for a Runner DB set name */
+    std::string runner_set_name;
+    if (json_defaults && json_defaults[0]) {
+        runner_set_name = json_get_string(json_defaults, "runner_set");
+    }
+
+    if (!runner_set_name.empty()) {
+        /* JACK bridge mode: delegate to Runner */
+        host_log("rnbo: JACK bridge mode, set='%s'", runner_set_name.c_str());
+        inst->jack_bridge = rnbo_jack_bridge_create(
+            runner_set_name.c_str(), false /* is_effect — TODO: detect from DB */,
+            g_host ? g_host->log : nullptr);
+        if (!inst->jack_bridge) {
+            inst->error = "RNBO Runner already in use by another slot";
+            host_log("rnbo: %s", inst->error.c_str());
+        } else if (inst->jack_bridge->error[0] != '\0') {
+            inst->error = inst->jack_bridge->error;
+        }
+        return inst;  /* Early return — skip all .so loading */
+    }
+
     if (!config_pack_path.empty()) {
         /* Pack selected via menu — devices already installed, just use this pack's graph */
         host_log("rnbo: loading pack from '%s'", config_pack_path.c_str());
@@ -1342,6 +1368,12 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
 static void rnbo_destroy(void *instance) {
     auto *inst = (RnboInstance*)instance;
     if (!inst) return;
+    if (inst->jack_bridge) {
+        rnbo_jack_bridge_destroy(inst->jack_bridge);
+        inst->jack_bridge = nullptr;
+        delete inst;
+        return;
+    }
     for (auto &node : inst->graph.nodes) {
         if (node.handle) {
             auto &dev = inst->devices[node.device_index];
@@ -1355,6 +1387,10 @@ static void rnbo_destroy(void *instance) {
 static void rnbo_on_midi(void *instance, const uint8_t *msg, int len, int source) {
     auto *inst = (RnboInstance*)instance;
     if (!inst || len < 1) return;
+    if (inst->jack_bridge) {
+        rnbo_jack_bridge_send_midi(inst->jack_bridge, msg, len);
+        return;
+    }
     rnbo_midi_event_t m;
     m.len = (len > 3) ? 3 : len;
     m.data[0] = msg[0];
@@ -1433,7 +1469,9 @@ static int rnbo_get_param(void *instance, const char *key, char *buf, int buf_le
 static int rnbo_get_error(void *instance, char *buf, int buf_len) {
     auto *inst = (RnboInstance*)instance;
     if (!inst) return 0;
-    if (inst->graph.nodes.empty() && inst->devices.empty())
+    if (!inst->error.empty())
+        return snprintf(buf, buf_len, "%s", inst->error.c_str());
+    if (inst->graph.nodes.empty() && inst->devices.empty() && !inst->jack_bridge)
         return snprintf(buf, buf_len, "No RNBO devices found");
     return 0;
 }
@@ -1441,6 +1479,19 @@ static int rnbo_get_error(void *instance, char *buf, int buf_len) {
 static void rnbo_render_block(void *instance, int16_t *out_lr, int frames) {
     auto *inst = (RnboInstance*)instance;
     if (!inst) { memset(out_lr, 0, frames * 2 * sizeof(int16_t)); return; }
+
+    if (inst->jack_bridge) {
+        if (inst->jack_bridge->is_effect) {
+            rnbo_jack_bridge_write_audio(inst->jack_bridge, out_lr, frames);
+        }
+        rnbo_jack_bridge_read_audio(inst->jack_bridge, out_lr, frames);
+        float vol = inst->volume;
+        if (vol < 0.99f) {
+            for (int i = 0; i < frames * 2; i++)
+                out_lr[i] = (int16_t)(out_lr[i] * vol);
+        }
+        return;
+    }
 
     if (inst->graph_mode) {
         process_graph(inst, out_lr, frames);
