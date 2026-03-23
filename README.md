@@ -1,6 +1,55 @@
-# RNBO for Move Anything
+# RNBO for Schwung
 
-Run [RNBO](https://rnbo.cycling74.com/) graphs from Max/MSP on Ableton Move via the Signal Chain.
+Run [RNBO](https://rnbo.cycling74.com/) on Ableton Move via [Schwung](https://github.com/charlesvestal/schwung). Two modes:
+
+- **RNBO Runner** (overtake module) — full RNBO Runner experience with Move's pads, knobs, display, and LEDs
+- **Signal Chain** — load RNBO synths and effects as chain modules alongside other Schwung modules
+
+## RNBO Runner (Overtake Module)
+
+Takes over Move completely — rnbomovecontrol drives the display, LEDs, and MIDI while RNBO patchers handle audio via JACK.
+
+### Prerequisites
+
+1. [Schwung](https://github.com/charlesvestal/schwung) installed on Move
+2. [RNBO Runner](https://rnbo.cycling74.com/explore/ableton-move) installed on Move (Cycling '74's official installer)
+3. [schwung-jack](https://github.com/charlesvestal/schwung-jack) shadow driver
+
+### Installation
+
+```bash
+# 1. Build and install the JACK shadow driver
+cd schwung-jack
+./scripts/build.sh
+scp build/jack_shadow.so ableton@move.local:/data/UserData/rnbo/lib/jack/
+
+# 2. Build and install the RNBO modules + display_ctl
+cd schwung-rnbo
+./scripts/build.sh
+./scripts/install.sh
+```
+
+After installation, **RNBO Runner** appears in Schwung's overtake menu. The first launch takes ~9 seconds (JACK + rnbomovecontrol startup). Subsequent graph changes are instant.
+
+### How it works
+
+```
+Schwung (overtake mode)
+  └─ ui.js launches rnbomovecontrol
+       ├─ Starts JACK with shadow driver (jack_shadow.so)
+       │    └─ Communicates with Schwung shim via /dev/shm/schwung_jack
+       │         ├─ Audio: mixed into Move output (synchronous wake+wait)
+       │         ├─ MIDI: routed to/from Move hardware (sysex LEDs, pad input)
+       │         └─ Display: overrides Move's screen
+       ├─ Starts rnbooscquery (graph/preset management)
+       └─ Starts rnbo-runner-panel (web UI at port 3000)
+```
+
+---
+
+## Signal Chain Modules
+
+Load RNBO synths and effects into Schwung's signal chain alongside other modules.
 
 ## Adding Packs
 
