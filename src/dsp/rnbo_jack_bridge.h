@@ -229,6 +229,18 @@ static int write_runner_config(RnboJackBridge *b) {
 // ---- Helper: start jackd ----
 
 static pid_t start_jackd(RnboJackBridge *b) {
+    /* Check if jackd is already running */
+    FILE *p = popen("pgrep -x jackd", "r");
+    if (p) {
+        char line[64];
+        if (fgets(line, sizeof(line), p)) {
+            pclose(p);
+            rnbo_bridge_log(b, "rnbo-jack: jackd already running, reusing");
+            return 0;  /* Return 0 to signal: don't kill on cleanup */
+        }
+        pclose(p);
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         rnbo_bridge_set_error(b, "fork() failed for jackd: %s", strerror(errno));
@@ -480,6 +492,14 @@ static int send_osc_load_set(RnboJackBridge *b, const char *set_name) {
     return 0;
 }
 
+// ---- JACK shutdown callback ----
+
+static void rnbo_jack_shutdown_cb(void *arg) {
+    RnboJackBridge *b = (RnboJackBridge *)arg;
+    b->audio_flowing = false;
+    b->client = NULL;  /* Don't try to close */
+}
+
 // ---- Create bridge ----
 
 static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
@@ -509,6 +529,11 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
     snprintf(b->set_name, sizeof(b->set_name), "%s", set_name ? set_name : "");
 
     rnbo_bridge_log(b, "Creating JACK bridge for set '%s' (fx=%d)", b->set_name, is_effect);
+
+    /* Clean up stale processes from previous crash */
+    system("killall -9 rnbooscquery 2>/dev/null");
+    system("killall -9 jackd 2>/dev/null");
+    usleep(200000);
 
     // Step 1: Write runner config
     if (write_runner_config(b) < 0) {
@@ -540,6 +565,9 @@ static RnboJackBridge *rnbo_jack_bridge_create(const char *set_name,
     }
 
     rnbo_bridge_log(b, "JACK client '%s' opened", jack_get_client_name(b->client));
+
+    // Register shutdown callback
+    jack_on_shutdown(b->client, rnbo_jack_shutdown_cb, b);
 
     // Step 4: Create ring buffers
     b->rb_audio_from_runner_L = jack_ringbuffer_create(RNBO_RB_AUDIO_BYTES);
@@ -667,7 +695,7 @@ static void rnbo_jack_bridge_destroy(RnboJackBridge *b) {
         b->runner_pid = 0;
     }
 
-    // Kill jackd
+    // Kill jackd (only if we started it — pid 0 means we reused an existing one)
     if (b->jackd_pid > 0) {
         rnbo_bridge_log(b, "Killing jackd pid=%d", b->jackd_pid);
         kill(b->jackd_pid, SIGTERM);
@@ -677,6 +705,7 @@ static void rnbo_jack_bridge_destroy(RnboJackBridge *b) {
             kill(b->jackd_pid, SIGKILL);
             waitpid(b->jackd_pid, &wstatus, 0);
         }
+        system("killall -9 jackd 2>/dev/null");
         b->jackd_pid = 0;
     }
 
@@ -702,6 +731,20 @@ static int rnbo_jack_bridge_read_audio(RnboJackBridge *b,
                                         int16_t *out_lr,
                                         int frames) {
     if (!b || !out_lr) return -1;
+
+    /* Periodically check Runner health (every ~1000 blocks ~ 3 seconds) */
+    static int health_check_counter = 0;
+    if (++health_check_counter >= 1000) {
+        health_check_counter = 0;
+        if (b->runner_pid > 0) {
+            int status;
+            pid_t result = waitpid(b->runner_pid, &status, WNOHANG);
+            if (result != 0) {
+                b->audio_flowing = false;
+                rnbo_bridge_log(b, "rnbo-jack: Runner process died");
+            }
+        }
+    }
 
     size_t bytes = frames * sizeof(float);
 
