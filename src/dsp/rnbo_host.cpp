@@ -541,6 +541,7 @@ static void extract_rnbopacks(const char *module_dir) {
     closedir(dir);
 }
 
+
 static std::vector<RnboDevice> scan_devices(const char *devices_dir) {
     std::vector<RnboDevice> devices;
     DIR *dir = opendir(devices_dir);
@@ -1249,17 +1250,29 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
     inst->volume = 0.7f;
     inst->graph_mode = false;
 
-    /* Extract any .rnbopack files into devices/ and pack/ */
     host_log("rnbo: module_dir = '%s'", module_dir);
+
+    /* Check config_json for a pack path (from scan_packs menu selection) */
+    std::string config_pack_path;
+    if (json_defaults && json_defaults[0]) {
+        host_log("rnbo: config_json = '%s'", json_defaults);
+        config_pack_path = json_get_string(json_defaults, "pack");
+    }
+
+    if (!config_pack_path.empty()) {
+        /* Pack selected via menu — devices already installed, just use this pack's graph */
+        host_log("rnbo: loading pack from '%s'", config_pack_path.c_str());
+    }
+
+    /* Extract any .rnbopack files into devices/ (idempotent, skips already-extracted) */
     extract_rnbopacks(module_dir);
 
     std::string devices_dir = std::string(module_dir) + "/devices";
     inst->devices = scan_devices(devices_dir.c_str());
 
     /* Try to find and load set JSON for graph mode */
-    /* Look in pack/ directory first, then module_dir */
     std::string set_json_str;
-    std::string pack_dir = std::string(module_dir) + "/pack";
+    std::string pack_dir = !config_pack_path.empty() ? config_pack_path : std::string(module_dir) + "/pack";
     DIR *pack = opendir(pack_dir.c_str());
     if (pack) {
         closedir(pack);
