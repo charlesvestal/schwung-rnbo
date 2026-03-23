@@ -29,6 +29,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <sched.h>
+#include <stdarg.h>
 
 #include <atomic>
 
@@ -85,7 +86,7 @@ typedef struct RnboJackBridge {
 
     // State
     int is_effect;
-    volatile int audio_flowing;
+    std::atomic<int> audio_flowing;
     char set_name[256];
     char error[512];
 
