@@ -95,6 +95,7 @@ echo "Packaging rnbo-runner..."
 mkdir -p "dist/rnbo-runner"
 cp src/modules/rnbo-runner/module.json "dist/rnbo-runner/"
 cp src/modules/rnbo-runner/ui.js "dist/rnbo-runner/"
+cp src/modules/rnbo-runner/exit-hook.sh "dist/rnbo-runner/"
 
 echo ""
 echo "=== Build Complete ==="

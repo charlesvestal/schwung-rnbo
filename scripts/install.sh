@@ -88,6 +88,10 @@ if [ -d "$REPO_ROOT/dist/rnbo-runner" ]; then
     ssh "$MOVE_USER@$MOVE_HOST" "mkdir -p $RUNNER_DIR"
     scp "$REPO_ROOT/dist/rnbo-runner/module.json" "$MOVE_USER@$MOVE_HOST:$RUNNER_DIR/"
     scp "$REPO_ROOT/dist/rnbo-runner/ui.js" "$MOVE_USER@$MOVE_HOST:$RUNNER_DIR/"
+    if [ -f "$REPO_ROOT/dist/rnbo-runner/exit-hook.sh" ]; then
+        scp "$REPO_ROOT/dist/rnbo-runner/exit-hook.sh" "$MOVE_USER@$MOVE_HOST:$RUNNER_DIR/"
+        ssh "$MOVE_USER@$MOVE_HOST" "chmod +x $RUNNER_DIR/exit-hook.sh"
+    fi
 fi
 
 echo ""
