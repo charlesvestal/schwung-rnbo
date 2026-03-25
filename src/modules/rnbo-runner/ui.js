@@ -64,8 +64,8 @@ globalThis.tick = function() {
             print(0, 35, 'Resuming...', 1);
         }
 
-        // Frame 5: restore LEDs (skip_led_clear means no init clearing to wait for)
-        if (phase === 5) {
+        // Frame 35: restore LEDs after overtake init LED clearing completes (~frame 30)
+        if (phase === 35) {
             /* Restore cached JACK LEDs via shim */
             if (typeof console !== 'undefined') {
                 console.log('RNBO Runner frame 35: shadow_set_param=' + (typeof shadow_set_param));
