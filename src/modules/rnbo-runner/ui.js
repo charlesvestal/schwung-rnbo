@@ -10,10 +10,14 @@ let phase = 0;
 let displayEnabled = false;
 let resuming = false;
 
-/* Check if JACK is already running (suspended session) */
+/* Check if JACK is already running (suspended session).
+ * We use a flag file under /data/UserData since host_file_exists
+ * restricts paths to /data/UserData (security validation). */
+const JACK_RUNNING_FLAG = '/data/UserData/schwung/jack_running';
+
 function isJackRunning() {
     if (typeof host_file_exists === "function") {
-        return host_file_exists('/dev/shm/schwung_jack');
+        return host_file_exists(JACK_RUNNING_FLAG);
     }
     return false;
 }
@@ -22,6 +26,11 @@ globalThis.init = function() {
     phase = 0;
     displayEnabled = false;
     resuming = isJackRunning();
+    if (typeof console !== 'undefined') {
+        console.log('RNBO Runner init: resuming=' + resuming +
+                     ' host_file_exists=' + (typeof host_file_exists) +
+                     ' shm=' + (typeof host_file_exists === 'function' ? host_file_exists('/dev/shm/schwung_jack') : 'N/A'));
+    }
 };
 
 globalThis.tick = function() {
@@ -78,12 +87,15 @@ globalThis.tick = function() {
         host_system_cmd('chmod +x ' + HOOKS_DIR + '/overtake-exit.sh');
     }
 
-    // Frame 3: launch rnbomovecontrol
+    // Frame 3: launch rnbomovecontrol + create running flag
     if (phase === 3) {
         clear_screen();
         print(0, 10, 'RNBO Runner', 2);
         print(0, 35, 'Loading...', 1);
         host_system_cmd('sh -c "export HOME=/data/UserData LD_LIBRARY_PATH=' + RNBO_DIR + '/lib:$LD_LIBRARY_PATH && nohup ' + CONTROL_BIN + ' -s ' + SHADOW_CONFIG + ' > /data/UserData/schwung/rnbo-runner.log 2>&1 &"');
+        if (typeof host_write_file === "function") {
+            host_write_file(JACK_RUNNING_FLAG, '1');
+        }
     }
 
     // Frame 50: pin JACK/RNBO to cores 2-3, Move stays on 0-1.
