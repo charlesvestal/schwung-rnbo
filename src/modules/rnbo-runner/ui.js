@@ -129,6 +129,12 @@ globalThis.tick = function() {
         displayEnabled = true;
     }
 
+    // Connect patcher MIDI inputs to system:midi_capture_ext.
+    // Polls every ~5s but only runs jack_connect when ports change (graph reload).
+    if (phase > 440 && phase % 220 === 0) {
+        host_system_cmd('sh -c "' + RNBO_DIR + '/scripts/midi_connect.sh &"');
+    }
+
     // Keep clearing so overtake display doesn't override RNBO
     if (displayEnabled) {
         clear_screen();
