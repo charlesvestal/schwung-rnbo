@@ -10,6 +10,7 @@
     "component_type": "overtake",
     "capabilities": {
         "audio_out": true,
-        "midi_out": true
+        "midi_out": true,
+        "skip_led_clear": true
     }
 }

@@ -12,13 +12,24 @@ let resuming = false;
 
 /* Check if JACK is already running (suspended session).
  * We use a flag file under /data/UserData since host_file_exists
- * restricts paths to /data/UserData (security validation). */
+ * restricts paths to /data/UserData (security validation).
+ * Also verify JACK process is actually running (flag survives reboot). */
 const JACK_RUNNING_FLAG = '/data/UserData/schwung/jack_running';
 
 function isJackRunning() {
-    if (typeof host_file_exists === "function") {
-        return host_file_exists(JACK_RUNNING_FLAG);
+    if (typeof host_file_exists !== "function") return false;
+    if (!host_file_exists(JACK_RUNNING_FLAG)) return false;
+    /* Flag exists — verify JACK is actually running (flag may be stale from reboot) */
+    if (typeof host_system_cmd === "function") {
+        /* pgrep returns 0 if found. Write result to a temp check file. */
+        host_system_cmd('sh -c "pgrep -x jackd > /dev/null 2>&1 && echo 1 > /data/UserData/schwung/jack_check || echo 0 > /data/UserData/schwung/jack_check"');
+        if (typeof host_read_file === "function") {
+            var result = host_read_file('/data/UserData/schwung/jack_check');
+            if (result && result.trim() === '1') return true;
+        }
     }
+    /* Flag is stale — clean it up */
+    host_system_cmd('rm -f ' + JACK_RUNNING_FLAG);
     return false;
 }
 
@@ -53,11 +64,17 @@ globalThis.tick = function() {
             print(0, 35, 'Resuming...', 1);
         }
 
-        // Frame 35: restore LEDs AFTER overtake init LED clearing completes (~frame 30)
-        if (phase === 35) {
+        // Frame 5: restore LEDs (skip_led_clear means no init clearing to wait for)
+        if (phase === 5) {
             /* Restore cached JACK LEDs via shim */
+            if (typeof console !== 'undefined') {
+                console.log('RNBO Runner frame 35: shadow_set_param=' + (typeof shadow_set_param));
+            }
             if (typeof shadow_set_param === "function") {
                 shadow_set_param(0, "jack:restore_leds", "1");
+                if (typeof console !== 'undefined') {
+                    console.log('RNBO Runner: called jack:restore_leds');
+                }
             }
         }
 
