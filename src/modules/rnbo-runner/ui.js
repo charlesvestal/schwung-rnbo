@@ -37,20 +37,28 @@ globalThis.tick = function() {
             host_system_cmd('chmod +x ' + HOOKS_DIR + '/overtake-exit.sh');
         }
 
-        // Frame 3: re-enable RNBO display + request LED restore
+        // Frame 3: show resuming message
         if (phase === 3) {
             clear_screen();
             print(0, 10, 'RNBO Runner', 2);
             print(0, 35, 'Resuming...', 1);
-            host_system_cmd('sh -c "' + DISPLAY_CTL + ' 1"');
+        }
+
+        // Frame 35: restore LEDs AFTER overtake init LED clearing completes (~frame 30)
+        if (phase === 35) {
             /* Restore cached JACK LEDs via shim */
             if (typeof shadow_set_param === "function") {
                 shadow_set_param(0, "jack:restore_leds", "1");
             }
         }
 
-        // Frame 20: done resuming
-        if (phase === 20) {
+        // Frame 40: re-enable RNBO display
+        if (phase === 40) {
+            host_system_cmd('sh -c "' + DISPLAY_CTL + ' 1"');
+        }
+
+        // Frame 50: done resuming
+        if (phase === 50) {
             displayEnabled = true;
             resuming = false;
         }
