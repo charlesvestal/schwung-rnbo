@@ -89,6 +89,29 @@ The host:
     → processes: Synth → Delay → Reverb → Limiter → output
 ```
 
+## Saving With a Set
+
+Schwung saves a chain slot by asking the module for one `state` string and writes
+it back when the set is loaded again (Movy's snapshots and user presets use the
+same string). The host answers `get_param("state")` with a flat JSON object of
+every parameter of every patcher in the graph, keyed the same way as the
+individual parameter keys, `<instance_index>_<paramId>` with `/` written as `-`:
+
+```json
+{"volume":0.7,"0_root":36,"0_poly-cutoff":1200}
+```
+
+`set_param("state", json)` applies it. Parameters hidden with `@visible 0` are
+included even though they never reach a knob, so a patcher that keeps part of its
+state in hidden parameters comes back whole. Keys that no longer exist, because
+the pack changed since the save, are skipped. The `state` blob and the
+per-parameter keys both reach hidden parameters.
+
+Parameter values are restored as a whole after the patcher has initialised, so a
+patcher's own startup values (`loadbang`, `@sendinit`) are overwritten by the
+saved ones. Anything a patcher keeps outside parameters (buffers, `@state`
+variables in a codebox) is not part of the state.
+
 ## Creating Packs
 
 1. Build your RNBO graph in Max (use the Beta for RNBO 1.4.3)
@@ -105,9 +128,16 @@ The host:
 Only needed once (or when updating host code):
 
 ```bash
-# Requires Docker and RNBO SDK 1.4.3 in rnbo-sdk/
+# Requires RNBO SDK 1.4.3 in rnbo-sdk/, and either an aarch64-linux-gnu-g++
+# cross toolchain on PATH (Homebrew: aarch64-unknown-linux-gnu) or Docker
 ./scripts/build.sh
 ./scripts/install.sh
+```
+
+The host has no RNBO dependency, so its unit tests build natively:
+
+```bash
+./scripts/test.sh
 ```
 
 ## Architecture

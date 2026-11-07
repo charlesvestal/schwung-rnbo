@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <math.h>
+#include <cmath>
 #include <dlfcn.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -186,6 +187,7 @@ struct ParamMeta {
     bool isEnum;
     std::vector<std::string> enumValues;
     int index;
+    bool visible;      /* false for @visible 0 params: kept out of the UI, kept in the state */
 };
 
 static std::vector<ParamMeta> parse_params_from_description(const char *json) {
@@ -233,9 +235,11 @@ static std::vector<ParamMeta> parse_params_from_description(const char *json) {
             }}
         }
 
-        bool visible = json_get_bool(s, "visible", true);
+        pm.visible = json_get_bool(s, "visible", true);
         std::string ptype = json_get_string(s, "type");
-        if (!pm.paramId.empty() && visible && ptype != "ParameterTypeSignal") params.push_back(pm);
+        /* Hidden params are kept: they are part of the patcher's state even though
+         * they never reach a knob (split_device_params). Signal params carry no value. */
+        if (!pm.paramId.empty() && ptype != "ParameterTypeSignal") params.push_back(pm);
         arr = p;
         if (*arr == ',') arr++;
         while (*arr == ' ' || *arr == '\n' || *arr == '\t') arr++;
@@ -277,11 +281,21 @@ struct RnboDevice {
     int num_output_channels;
     int num_midi_input_ports;
     int num_midi_output_ports;
-    std::vector<ParamMeta> params;
+    std::vector<ParamMeta> params;      /* visible params: knobs, views, chain_params */
+    std::vector<ParamMeta> all_params;  /* every non-signal param, hidden included: keys and state */
     std::vector<std::string> inports;
     std::vector<std::string> outports;
     bool is_effect;
 };
+
+/* Every non-signal param is addressable by key and saved in the state; only the
+ * visible ones are offered to the UI. */
+static void split_device_params(RnboDevice &dev, std::vector<ParamMeta> all) {
+    dev.all_params = std::move(all);
+    dev.params.clear();
+    for (auto &pm : dev.all_params)
+        if (pm.visible) dev.params.push_back(pm);
+}
 
 static bool load_device(RnboDevice &dev) {
     std::string desc_path = dev.dir_path + "/description.json";
@@ -293,7 +307,7 @@ static bool load_device(RnboDevice &dev) {
     dev.num_midi_input_ports = json_get_int(desc.c_str(), "numMidiInputPorts", 0);
     dev.num_midi_output_ports = json_get_int(desc.c_str(), "numMidiOutputPorts", 0);
     dev.is_effect = (dev.num_input_channels > 0);
-    dev.params = parse_params_from_description(desc.c_str());
+    split_device_params(dev, parse_params_from_description(desc.c_str()));
 
     /* Parse inports/outports */
     const char *ip = strstr(desc.c_str(), "\"inports\"");
@@ -966,6 +980,7 @@ struct RnboInstance {
     std::string module_dir;
     std::string chain_params_json;
     std::string ui_hierarchy_json;
+    std::string state_scratch;   /* get_param("state") builds here; grows once, then reused */
 };
 
 /* ======================================================================
@@ -1244,6 +1259,8 @@ static void process_graph(RnboInstance *inst, int16_t *out_lr, int frames) {
  * Plugin API v2
  * ====================================================================== */
 
+static size_t state_capacity_hint(RnboInstance *inst);
+
 static void* rnbo_create(const char *module_dir, const char *json_defaults) {
     auto *inst = new RnboInstance();
     inst->module_dir = module_dir;
@@ -1326,6 +1343,7 @@ static void* rnbo_create(const char *module_dir, const char *json_defaults) {
             }
 
             build_graph_ui(inst);
+            inst->state_scratch.reserve(state_capacity_hint(inst));
             host_log("rnbo: graph '%s' ready (%d nodes)", inst->graph.name.c_str(), (int)inst->graph.nodes.size());
         }
     }
@@ -1363,6 +1381,199 @@ static void rnbo_on_midi(void *instance, const uint8_t *msg, int len, int source
     inst->pending_midi.push_back(m);
 }
 
+/* ======================================================================
+ * Parameter keys and state
+ *
+ * Schwung addresses one parameter as "<instance_index>_<paramId>", with every
+ * '/' of the RNBO id written as '-' (a '/' cannot travel in a param key). The
+ * same keys name the entries of the `state` blob, the one string Schwung saves
+ * for a chain slot when a set is saved (and Movy for a snapshot or preset) and
+ * writes back when it is loaded:
+ *
+ *   {"volume":0.7,"0_root":36,"0_poly-cutoff":1200}
+ *
+ * The blob holds the host volume and every non-signal parameter of every live
+ * node, hidden (@visible 0) ones included, so a patcher that keeps part of its
+ * state in parameters the knobs never show comes back whole. Keys that no longer
+ * resolve, because the pack changed since the save, are skipped and counted.
+ * ====================================================================== */
+
+/* "<inst>_<paramId>" with '/' -> '-', appended; '"' and '\' are JSON-escaped. */
+static void append_param_key(std::string &out, int instance_index, const std::string &param_id) {
+    out += std::to_string(instance_index);
+    out += '_';
+    for (char c : param_id) {
+        if (c == '/') out += '-';
+        else if (c == '"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else out += c;
+    }
+}
+
+/* Does the part of a key after "<inst>_" spell this param id? */
+static bool key_tail_matches(const char *tail, const std::string &param_id) {
+    size_t n = param_id.size();
+    for (size_t i = 0; i < n; i++) {
+        char c = param_id[i];
+        if (c == '/') c = '-';
+        if (tail[i] != c) return false;
+    }
+    return tail[n] == '\0';
+}
+
+/* Resolve a key to a live node and its parameter. */
+static bool resolve_param_key(RnboInstance *inst, const char *key, GraphNode **out_node, const ParamMeta **out_pm) {
+    const char *sep = key;
+    while (*sep >= '0' && *sep <= '9') sep++;
+    if (sep == key || *sep != '_') return false;
+    int target_inst = atoi(key);
+    const char *tail = sep + 1;
+
+    for (auto &node : inst->graph.nodes) {
+        if (node.instance_index != target_inst) continue;
+        if (!node.handle) return false;
+        auto &dev = inst->devices[node.device_index];
+        for (auto &pm : dev.all_params) {
+            if (key_tail_matches(tail, pm.paramId)) {
+                *out_node = &node;
+                *out_pm = &pm;
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+static bool set_param_by_key(RnboInstance *inst, const char *key, double value) {
+    GraphNode *node = nullptr;
+    const ParamMeta *pm = nullptr;
+    if (!resolve_param_key(inst, key, &node, &pm)) return false;
+    auto &dev = inst->devices[node->device_index];
+    if (!dev.api_set_param) return false;
+    dev.api_set_param(node->handle, pm->index, value);
+    return true;
+}
+
+/* Rough byte count of the state blob, to reserve the scratch once at create. */
+static size_t state_capacity_hint(RnboInstance *inst) {
+    size_t n = 32;
+    for (auto &node : inst->graph.nodes) {
+        auto &dev = inst->devices[node.device_index];
+        for (auto &pm : dev.all_params) n += pm.paramId.size() + 24;
+    }
+    return n;
+}
+
+/* Serialize the state. Returns the length, or -1 when the host buffer is too
+ * small for the whole blob: a truncated blob would save, then fail to load. */
+static int rnbo_state_write(RnboInstance *inst, char *buf, int buf_len) {
+    std::string &s = inst->state_scratch;
+    s.clear();
+    char nb[64];
+    snprintf(nb, sizeof(nb), "%.6g", (double)inst->volume);
+    s += "{\"volume\":";
+    s += nb;
+    for (auto &node : inst->graph.nodes) {
+        if (!node.handle) continue;
+        auto &dev = inst->devices[node.device_index];
+        if (!dev.api_get_param) continue;
+        for (auto &pm : dev.all_params) {
+            double v = dev.api_get_param(node.handle, pm.index);
+            if (!std::isfinite(v)) continue;   /* "nan" is not JSON */
+            snprintf(nb, sizeof(nb), "%.6g", v);
+            s += ",\"";
+            append_param_key(s, node.instance_index, pm.paramId);
+            s += "\":";
+            s += nb;
+        }
+    }
+    s += '}';
+    if ((int)s.size() >= buf_len) {
+        host_log("rnbo: state is %d bytes, host buffer holds %d; not served", (int)s.size(), buf_len);
+        return -1;
+    }
+    memcpy(buf, s.c_str(), s.size() + 1);
+    return (int)s.size();
+}
+
+static const char *skip_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+/* Skip one JSON string body; p points just past the opening quote. */
+static const char *skip_string(const char *p) {
+    while (*p && *p != '"') {
+        if (*p == '\\' && p[1]) p++;
+        p++;
+    }
+    return *p == '"' ? p + 1 : p;
+}
+
+/* Skip one JSON value of any shape (for entries we do not understand). */
+static const char *skip_value(const char *p) {
+    if (*p == '"') return skip_string(p + 1);
+    if (*p == '{' || *p == '[') {
+        int depth = 0;
+        do {
+            if (*p == '"') { p = skip_string(p + 1); continue; }
+            if (*p == '{' || *p == '[') depth++;
+            else if (*p == '}' || *p == ']') depth--;
+            p++;
+        } while (*p && depth > 0);
+        return p;
+    }
+    while (*p && *p != ',' && *p != '}' && *p != ']') p++;
+    return p;
+}
+
+/* Apply a state blob: a flat JSON object of "key": number. A number in quotes
+ * is accepted too. Anything else under a key is skipped. */
+static void rnbo_state_apply(RnboInstance *inst, const char *json) {
+    if (!json) return;
+    const char *p = strchr(json, '{');
+    if (!p) return;
+    p = skip_ws(p + 1);
+    int applied = 0, skipped = 0;
+    std::string key;
+    while (*p && *p != '}') {
+        if (*p != '"') break;                       /* not an object member: give up */
+        const char *kstart = ++p;
+        const char *kend = skip_string(kstart);
+        if (kend == kstart || kend[-1] != '"') break;
+        key.assign(kstart, kend - 1 - kstart);
+        p = skip_ws(kend);
+        if (*p != ':') break;
+        p = skip_ws(p + 1);
+
+        bool quoted = (*p == '"');
+        const char *num = quoted ? p + 1 : p;
+        char *end = nullptr;
+        double v = strtod(num, &end);
+        bool numeric = (end != num) && std::isfinite(v);
+        if (quoted) {
+            /* a quoted value counts as a number only if the number fills the string */
+            const char *close = skip_string(p + 1);
+            numeric = numeric && (end == close - 1) && close[-1] == '"';
+            p = close;
+        } else if (numeric) {
+            p = end;
+        } else {
+            p = skip_value(p);
+        }
+
+        if (!numeric) skipped++;
+        else if (key == "volume") { inst->volume = std::max(0.0f, std::min(1.0f, (float)v)); applied++; }
+        else if (set_param_by_key(inst, key.c_str(), v)) applied++;
+        else skipped++;
+
+        p = skip_ws(p);
+        if (*p == ',') p = skip_ws(p + 1);
+    }
+    host_log("rnbo: state restored: %d param(s) applied, %d skipped", applied, skipped);
+}
+
 static void rnbo_set_param(void *instance, const char *key, const char *val) {
     auto *inst = (RnboInstance*)instance;
     if (!inst || !key || !val) return;
@@ -1371,29 +1582,11 @@ static void rnbo_set_param(void *instance, const char *key, const char *val) {
         inst->volume = std::max(0.0f, std::min(1.0f, (float)atof(val)));
         return;
     }
-
-    /* Parse "instIdx_paramId" where paramId has / replaced with - */
-    const char *sep = key;
-    while (*sep >= '0' && *sep <= '9') sep++;
-    if (*sep != '_') return;
-    int target_inst = atoi(key);
-    std::string safe_id(sep + 1);
-    /* Convert back: - to / */
-    std::string param_id;
-    for (char c : safe_id) param_id += (c == '-') ? '/' : c;
-
-    for (auto &node : inst->graph.nodes) {
-        if (node.instance_index != target_inst || !node.handle) continue;
-        auto &dev = inst->devices[node.device_index];
-        for (auto &pm : dev.params) {
-            if (pm.paramId == param_id) {
-                if (dev.api_set_param)
-                    dev.api_set_param(node.handle, pm.index, atof(val));
-                return;
-            }
-        }
-        break;
+    if (strcmp(key, "state") == 0) {
+        rnbo_state_apply(inst, val);
+        return;
     }
+    set_param_by_key(inst, key, atof(val));
 }
 
 static int rnbo_get_param(void *instance, const char *key, char *buf, int buf_len) {
@@ -1401,31 +1594,19 @@ static int rnbo_get_param(void *instance, const char *key, char *buf, int buf_le
     if (!inst || !key || !buf || buf_len < 1) return 0;
 
     if (strcmp(key, "volume") == 0) return snprintf(buf, buf_len, "%.2f", inst->volume);
+    if (strcmp(key, "state") == 0) return rnbo_state_write(inst, buf, buf_len);
     if (strcmp(key, "chain_params") == 0) return snprintf(buf, buf_len, "%s", inst->chain_params_json.c_str());
     if (strcmp(key, "ui_hierarchy") == 0) return snprintf(buf, buf_len, "%s", inst->ui_hierarchy_json.c_str());
     if (strcmp(key, "component_type") == 0) {
         return snprintf(buf, buf_len, "%s", inst->graph.is_effect ? "audio_fx" : "sound_generator");
     }
 
-    /* Parse "instIdx_paramId" */
-    const char *sep = key;
-    while (*sep >= '0' && *sep <= '9') sep++;
-    if (*sep != '_') return 0;
-    int target_inst = atoi(key);
-    std::string safe_id(sep + 1);
-    std::string param_id;
-    for (char c : safe_id) param_id += (c == '-') ? '/' : c;
-
-    for (auto &node : inst->graph.nodes) {
-        if (node.instance_index != target_inst || !node.handle) continue;
-        auto &dev = inst->devices[node.device_index];
-        for (auto &pm : dev.params) {
-            if (pm.paramId == param_id) {
-                double v = dev.api_get_param ? dev.api_get_param(node.handle, pm.index) : 0.0;
-                return snprintf(buf, buf_len, "%.6g", v);
-            }
-        }
-        break;
+    GraphNode *node = nullptr;
+    const ParamMeta *pm = nullptr;
+    if (resolve_param_key(inst, key, &node, &pm)) {
+        auto &dev = inst->devices[node->device_index];
+        double v = dev.api_get_param ? dev.api_get_param(node->handle, pm->index) : 0.0;
+        return snprintf(buf, buf_len, "%.6g", v);
     }
     return 0;
 }
