@@ -6,6 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 IMAGE_NAME="move-anything-builder"
 
+# Prefer a native cross toolchain if one is on PATH (e.g. Homebrew's
+# aarch64-unknown-linux-gnu); fall back to Docker otherwise.
+if [ -z "$CROSS_PREFIX" ] && command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
+    CROSS_PREFIX="aarch64-linux-gnu-"
+    echo "=== RNBO Build (native cross toolchain: $(aarch64-linux-gnu-g++ --version | head -n 1)) ==="
+fi
+
 # Check if we need Docker
 if [ -z "$CROSS_PREFIX" ] && [ ! -f "/.dockerenv" ]; then
     echo "=== RNBO Build (via Docker) ==="
@@ -66,11 +73,15 @@ ${CROSS_PREFIX}g++ -g -O2 -fPIC -std=c++17 \
     -c rnbo-sdk/RNBO.cpp \
     -o build/rnbo_runtime.o
 
+# Statically link libstdc++/libgcc into the bridge: GCC 13 headers emit a
+# GLIBCXX_3.4.32 iostream init symbol, but Move ships libstdc++ 6.0.29
+# (GLIBCXX_3.4.29), so a dynamically linked bridge fails to dlopen there.
 echo "Linking bridge.so..."
 ${CROSS_PREFIX}g++ -shared \
     build/rnbo_bridge.o \
     build/rnbo_runtime.o \
     -o build/bridge.so \
+    -static-libstdc++ -static-libgcc \
     -ldl -lm
 
 # Package modules
